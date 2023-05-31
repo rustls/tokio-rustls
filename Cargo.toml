@@ -1,6 +1,4 @@
 [workspace]
 members = [
     "tokio-rustls",
-    "tokio-rustls/examples/client",
-    "tokio-rustls/examples/server"
 ]
