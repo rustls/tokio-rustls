@@ -1,66 +1,77 @@
-# Tokio Tls
+# tokio-rustls
+[![github actions](https://github.com/tokio-rs/tls/workflows/CI/badge.svg)](https://github.com/tokio-rs/tls/actions)
+[![crates](https://img.shields.io/crates/v/tokio-rustls.svg)](https://crates.io/crates/tokio-rustls)
+[![license](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/tokio-rs/tls/blob/master/tokio-rustls/LICENSE-MIT)
+[![license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/tokio-rs/tls/blob/master/tokio-rustls/LICENSE-APACHE)
+[![docs.rs](https://docs.rs/tokio-rustls/badge.svg)](https://docs.rs/tokio-rustls)
 
-## Overview
+Asynchronous TLS/SSL streams for [Tokio](https://tokio.rs/) using
+[Rustls](https://github.com/rustls/rustls).
 
-This crate contains a collection of Tokio based TLS libraries.
+### Basic Structure of a Client
 
-- [`tokio-native-tls`](tokio-native-tls)
-- [`tokio-rustls`](tokio-rustls)
+```rust
+use std::sync::Arc;
+use tokio::net::TcpStream;
+use tokio_rustls::rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore, ServerName};
+use tokio_rustls::TlsConnector;
 
-## Getting Help
+// ...
 
-First, see if the answer to your question can be found in the [Tutorials] or the
-[API documentation]. If the answer is not there, there is an active community in
-the [Tokio Discord server][chat]. We would be happy to try to answer your
-question. Last, if that doesn't work, try opening an [issue] with the question.
+let mut root_cert_store = RootCertStore::empty();
+root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+    OwnedTrustAnchor::from_subject_spki_name_constraints(
+        ta.subject,
+        ta.spki,
+        ta.name_constraints,
+    )
+}));
+let config = ClientConfig::builder()
+    .with_safe_defaults()
+    .with_root_certificates(root_cert_store)
+    .with_no_client_auth();
+let connector = TlsConnector::from(Arc::new(config));
+let dnsname = ServerName::try_from("www.rust-lang.org").unwrap();
 
-[Tutorials]: https://tokio.rs/tokio/tutorial
-[API documentation]: https://docs.rs/tokio/latest/tokio
-[chat]: https://discord.gg/tokio
-[issue]: https://github.com/tokio-rs/tls/issues/new
+let stream = TcpStream::connect(&addr).await?;
+let mut stream = connector.connect(dnsname, stream).await?;
 
-## Contributing
+// ...
+```
 
-:balloon: Thanks for your help improving the project! We are so happy to have
-you! We have a [contributing guide][guide] to help you get involved in the Tokio
-project.
+### Client Example Program
 
-[guide]: CONTRIBUTING.md
+See [examples/client](examples/client/src/main.rs). You can run it with:
 
-## Related Projects
+```sh
+cd examples/client
+cargo run -- hsts.badssl.com
+```
 
-In addition to the crates in this repository, the Tokio project also maintains
-several other libraries, including:
+### Server Example Program
 
-* [`tokio`]: A runtime for writing reliable, asynchronous, and slim applications with the Rust programming language.
+See [examples/server](examples/server/src/main.rs). You can run it with:
 
-* [`tracing`] (formerly `tokio-trace`): A framework for application-level
-  tracing and async-aware diagnostics.
+```sh
+cd examples/server
+cargo run -- 127.0.0.1:8000 --cert mycert.der --key mykey.der
+```
 
-* [`mio`]: A low-level, cross-platform abstraction over OS I/O APIs that powers
-  `tokio`.
+### License & Origin
 
-* [`bytes`]: Utilities for working with bytes, including efficient byte buffers.
+This project is licensed under either of
 
-[`tokio`]: https://github.com/tokio-rs/tokio
-[`tracing`]: https://github.com/tokio-rs/tracing
-[`mio`]: https://github.com/tokio-rs/mio
-[`bytes`]: https://github.com/tokio-rs/bytes
+ * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
+   https://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or
+   https://opensource.org/licenses/MIT)
 
-## Supported Rust Versions
+at your option.
 
-Tokio is built against the latest stable, nightly, and beta Rust releases. The
-minimum version supported is the stable release from three months before the
-current stable release version. For example, if the latest stable Rust is 1.29,
-the minimum version supported is 1.26. The current Tokio version is not
-guaranteed to build on Rust versions earlier than the minimum supported version.
-
-## License
-
-This project is licensed under the [MIT license](LICENSE).
+This started as a fork of [tokio-tls](https://github.com/tokio-rs/tokio-tls).
 
 ### Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in Tokio by you, shall be licensed as MIT, without any additional
-terms or conditions.
+for inclusion in tokio-rustls by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
