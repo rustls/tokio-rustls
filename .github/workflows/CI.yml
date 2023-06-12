@@ -67,3 +67,16 @@ jobs:
       - name: Run cargo clippy
         if: always()
         run: cargo clippy --all-features -- -D warnings
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.60"
+
+      - run: cargo check --lib --all-features
