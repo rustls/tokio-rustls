@@ -41,7 +41,7 @@ let mut stream = connector.connect(dnsname, stream).await?;
 
 ### Client Example Program
 
-See [examples/client](examples/client/src/main.rs). You can run it with:
+See [examples/client.rs](examples/client.rs). You can run it with:
 
 ```sh
 cd examples/client
@@ -50,7 +50,7 @@ cargo run -- hsts.badssl.com
 
 ### Server Example Program
 
-See [examples/server](examples/server/src/main.rs). You can run it with:
+See [examples/server.rs](examples/server.rs). You can run it with:
 
 ```sh
 cd examples/server
