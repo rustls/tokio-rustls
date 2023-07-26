@@ -144,9 +144,6 @@ impl TlsConnector {
                 TlsState::Stream
             },
 
-            #[cfg(feature = "early-data")]
-            early_waker: None,
-
             session,
         }))
     }

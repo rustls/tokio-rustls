@@ -12,9 +12,6 @@ pub struct TlsStream<IO> {
     pub(crate) io: IO,
     pub(crate) session: ClientConnection,
     pub(crate) state: TlsState,
-
-    #[cfg(feature = "early-data")]
-    pub(crate) early_waker: Option<std::task::Waker>,
 }
 
 impl<IO> TlsStream<IO> {
@@ -79,31 +76,15 @@ where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match self.state {
             #[cfg(feature = "early-data")]
             TlsState::EarlyData(..) => {
-                let this = self.get_mut();
-
-                // In the EarlyData state, we have not really established a Tls connection.
-                // Before writing data through `AsyncWrite` and completing the tls handshake,
-                // we ignore read readiness and return to pending.
-                //
-                // In order to avoid event loss,
-                // we need to register a waker and wake it up after tls is connected.
-                if this
-                    .early_waker
-                    .as_ref()
-                    .filter(|waker| cx.waker().will_wake(waker))
-                    .is_none()
-                {
-                    this.early_waker = Some(cx.waker().clone());
-                }
-
-                Poll::Pending
+                ready!(self.as_mut().poll_flush(cx))?;
+                self.as_mut().poll_read(cx, buf)
             }
             TlsState::Stream | TlsState::WriteShutdown => {
                 let this = self.get_mut();
@@ -180,10 +161,6 @@ where
                 // end
                 this.state = TlsState::Stream;
 
-                if let Some(waker) = this.early_waker.take() {
-                    waker.wake();
-                }
-
                 stream.as_mut_pin().poll_write(cx, buf)
             }
             _ => stream.as_mut_pin().poll_write(cx, buf),
@@ -210,15 +187,9 @@ where
                         *pos += len;
                     }
                 }
-
                 this.state = TlsState::Stream;
-
-                if let Some(waker) = this.early_waker.take() {
-                    waker.wake();
-                }
             }
         }
-
         stream.as_mut_pin().poll_flush(cx)
     }
 
