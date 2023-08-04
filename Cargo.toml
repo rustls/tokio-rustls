@@ -13,7 +13,7 @@ rust-version = "1.60"
 
 [dependencies]
 tokio = "1.0"
-rustls = { version = "0.21.0", default-features = false }
+rustls = { version = "0.21.6", default-features = false }
 
 [features]
 default = ["logging", "tls12"]

@@ -113,7 +113,7 @@ async fn pass() -> io::Result<()> {
 
     let chain = certs(&mut std::io::Cursor::new(*chain)).unwrap();
     let mut root_store = rustls::RootCertStore::empty();
-    root_store.add_server_trust_anchors(chain.iter().map(|cert| {
+    root_store.add_trust_anchors(chain.iter().map(|cert| {
         let ta = webpki::TrustAnchor::try_from_cert_der(&cert[..]).unwrap();
         OwnedTrustAnchor::from_subject_spki_name_constraints(
             ta.subject,
@@ -139,7 +139,7 @@ async fn fail() -> io::Result<()> {
 
     let chain = certs(&mut std::io::Cursor::new(*chain)).unwrap();
     let mut root_store = rustls::RootCertStore::empty();
-    root_store.add_server_trust_anchors(chain.iter().map(|cert| {
+    root_store.add_trust_anchors(chain.iter().map(|cert| {
         let ta = webpki::TrustAnchor::try_from_cert_der(&cert[..]).unwrap();
         OwnedTrustAnchor::from_subject_spki_name_constraints(
             ta.subject,
