@@ -54,17 +54,15 @@ async fn main() -> io::Result<()> {
                 ta.name_constraints,
             )
         });
-        root_cert_store.add_server_trust_anchors(trust_anchors);
+        root_cert_store.add_trust_anchors(trust_anchors);
     } else {
-        root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(
-            |ta| {
-                OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                )
-            },
-        ));
+        root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
+            OwnedTrustAnchor::from_subject_spki_name_constraints(
+                ta.subject,
+                ta.spki,
+                ta.name_constraints,
+            )
+        }));
     }
 
     let config = rustls::ClientConfig::builder()

@@ -1,4 +1,5 @@
 # tokio-rustls
+
 [![github actions](https://github.com/rustls/tokio-rustls/workflows/CI/badge.svg)](https://github.com/rustls/tokio-rustls/actions)
 [![crates](https://img.shields.io/crates/v/tokio-rustls.svg)](https://crates.io/crates/tokio-rustls)
 [![license](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/rustls/tokio-rustls/blob/main/LICENSE-MIT)
@@ -19,7 +20,7 @@ use tokio_rustls::TlsConnector;
 // ...
 
 let mut root_cert_store = RootCertStore::empty();
-root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
     OwnedTrustAnchor::from_subject_spki_name_constraints(
         ta.subject,
         ta.spki,
@@ -61,10 +62,10 @@ cargo run -- 127.0.0.1:8000 --cert mycert.der --key mykey.der
 
 This project is licensed under either of
 
- * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
-   https://www.apache.org/licenses/LICENSE-2.0)
- * MIT license ([LICENSE-MIT](LICENSE-MIT) or
-   https://opensource.org/licenses/MIT)
+- Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
+  https://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or
+  https://opensource.org/licenses/MIT)
 
 at your option.
 

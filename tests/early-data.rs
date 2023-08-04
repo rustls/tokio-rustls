@@ -142,7 +142,7 @@ async fn test_0rtt() -> io::Result<()> {
         )
     });
     let mut root_store = RootCertStore::empty();
-    root_store.add_server_trust_anchors(trust_anchors);
+    root_store.add_trust_anchors(trust_anchors);
     let mut config = rustls::ClientConfig::builder()
         .with_safe_default_cipher_suites()
         .with_safe_default_kx_groups()
