@@ -1,11 +1,11 @@
-use argh::FromArgs;
-use std::convert::TryFrom;
 use std::fs::File;
 use std::io;
 use std::io::BufReader;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use argh::FromArgs;
 use tokio::io::{copy, split, stdin as tokio_stdin, stdout as tokio_stdout, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::{self, OwnedTrustAnchor};

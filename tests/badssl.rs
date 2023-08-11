@@ -1,7 +1,7 @@
-use std::convert::TryFrom;
 use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::{

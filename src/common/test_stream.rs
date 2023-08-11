@@ -279,8 +279,6 @@ async fn stream_eof() -> io::Result<()> {
 }
 
 fn make_pair() -> (ServerConnection, ClientConnection) {
-    use std::convert::TryFrom;
-
     let (sconfig, cconfig) = utils::make_configs();
     let server = ServerConnection::new(sconfig).unwrap();
 
