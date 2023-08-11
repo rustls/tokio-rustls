@@ -1,8 +1,5 @@
 #![cfg(feature = "early-data")]
 
-use futures_util::{future, future::Future, ready};
-use rustls::RootCertStore;
-use std::convert::TryFrom;
 use std::io::{self, BufRead, BufReader, Cursor};
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -11,6 +8,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread;
 use std::time::Duration;
+
+use futures_util::{future, future::Future, ready};
+use rustls::RootCertStore;
 use tokio::io::{split, AsyncRead, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;

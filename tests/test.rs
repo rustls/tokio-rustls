@@ -1,14 +1,14 @@
-use futures_util::future::TryFutureExt;
-use lazy_static::lazy_static;
-use rustls::{ClientConfig, OwnedTrustAnchor};
-use rustls_pemfile::{certs, rsa_private_keys};
-use std::convert::TryFrom;
 use std::io::{BufReader, Cursor, ErrorKind};
 use std::net::SocketAddr;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, thread};
+
+use futures_util::future::TryFutureExt;
+use lazy_static::lazy_static;
+use rustls::{ClientConfig, OwnedTrustAnchor};
+use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::io::{copy, split, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
@@ -164,7 +164,6 @@ async fn fail() -> io::Result<()> {
 #[tokio::test]
 async fn test_lazy_config_acceptor() -> io::Result<()> {
     let (sconfig, cconfig) = utils::make_configs();
-    use std::convert::TryFrom;
 
     let (cstream, sstream) = tokio::io::duplex(1200);
     let domain = rustls::ServerName::try_from("foobar.com").unwrap();
