@@ -10,7 +10,7 @@ description = "Asynchronous TLS/SSL streams for Tokio using Rustls."
 categories = ["asynchronous", "cryptography", "network-programming"]
 edition = "2021"
 rust-version = "1.63"
-exclude = ["/.github", "/examples", "/scripts", "/tests"]
+exclude = ["/.github", "/examples", "/scripts"]
 
 [dependencies]
 tokio = "1.0"
