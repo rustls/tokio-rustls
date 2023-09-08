@@ -47,6 +47,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 pub use rustls;
+use rustls::crypto::ring::Ring;
 use rustls::{ClientConfig, ClientConnection, CommonState, ServerConfig, ServerConnection};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -67,7 +68,7 @@ pub mod server;
 /// A wrapper around a `rustls::ClientConfig`, providing an async `connect` method.
 #[derive(Clone)]
 pub struct TlsConnector {
-    inner: Arc<ClientConfig>,
+    inner: Arc<ClientConfig<Ring>>,
     #[cfg(feature = "early-data")]
     early_data: bool,
 }
@@ -75,11 +76,11 @@ pub struct TlsConnector {
 /// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
 #[derive(Clone)]
 pub struct TlsAcceptor {
-    inner: Arc<ServerConfig>,
+    inner: Arc<ServerConfig<Ring>>,
 }
 
-impl From<Arc<ClientConfig>> for TlsConnector {
-    fn from(inner: Arc<ClientConfig>) -> TlsConnector {
+impl From<Arc<ClientConfig<Ring>>> for TlsConnector {
+    fn from(inner: Arc<ClientConfig<Ring>>) -> TlsConnector {
         TlsConnector {
             inner,
             #[cfg(feature = "early-data")]
@@ -88,8 +89,8 @@ impl From<Arc<ClientConfig>> for TlsConnector {
     }
 }
 
-impl From<Arc<ServerConfig>> for TlsAcceptor {
-    fn from(inner: Arc<ServerConfig>) -> TlsAcceptor {
+impl From<Arc<ServerConfig<Ring>>> for TlsAcceptor {
+    fn from(inner: Arc<ServerConfig<Ring>>) -> TlsAcceptor {
         TlsAcceptor { inner }
     }
 }
@@ -210,9 +211,10 @@ where
     /// # Example
     ///
     /// ```no_run
+    /// # use rustls::crypto::ring::Ring;
     /// # fn choose_server_config(
     /// #     _: rustls::server::ClientHello,
-    /// # ) -> std::sync::Arc<rustls::ServerConfig> {
+    /// # ) -> std::sync::Arc<rustls::ServerConfig<Ring>> {
     /// #     unimplemented!();
     /// # }
     /// # #[allow(unused_variables)]
@@ -304,11 +306,11 @@ where
         self.accepted.client_hello()
     }
 
-    pub fn into_stream(self, config: Arc<ServerConfig>) -> Accept<IO> {
+    pub fn into_stream(self, config: Arc<ServerConfig<Ring>>) -> Accept<IO> {
         self.into_stream_with(config, |_| ())
     }
 
-    pub fn into_stream_with<F>(self, config: Arc<ServerConfig>, f: F) -> Accept<IO>
+    pub fn into_stream_with<F>(self, config: Arc<ServerConfig<Ring>>, f: F) -> Accept<IO>
     where
         F: FnOnce(&mut ServerConnection),
     {
