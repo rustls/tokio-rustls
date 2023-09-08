@@ -2,39 +2,34 @@ mod utils {
     use std::io::{BufReader, Cursor};
     use std::sync::Arc;
 
-    use rustls::{ClientConfig, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerConfig};
+    use rustls::crypto::ring::Ring;
+    use rustls::{ClientConfig, RootCertStore, ServerConfig};
     use rustls_pemfile::{certs, rsa_private_keys};
 
     #[allow(dead_code)]
-    pub fn make_configs() -> (Arc<ServerConfig>, Arc<ClientConfig>) {
+    pub fn make_configs() -> (Arc<ServerConfig<Ring>>, Arc<ClientConfig<Ring>>) {
         const CERT: &str = include_str!("end.cert");
         const CHAIN: &str = include_str!("end.chain");
         const RSA: &str = include_str!("end.rsa");
 
         let cert = certs(&mut BufReader::new(Cursor::new(CERT)))
-            .unwrap()
-            .drain(..)
-            .map(rustls::Certificate)
+            .map(|result| result.unwrap())
             .collect();
-        let mut keys = rsa_private_keys(&mut BufReader::new(Cursor::new(RSA))).unwrap();
-        let mut keys = keys.drain(..).map(PrivateKey);
+        let key = rsa_private_keys(&mut BufReader::new(Cursor::new(RSA)))
+            .next()
+            .unwrap()
+            .unwrap();
         let sconfig = ServerConfig::builder()
             .with_safe_defaults()
             .with_no_client_auth()
-            .with_single_cert(cert, keys.next().unwrap())
+            .with_single_cert(cert, key.into())
             .unwrap();
 
         let mut client_root_cert_store = RootCertStore::empty();
         let mut chain = BufReader::new(Cursor::new(CHAIN));
-        let certs = certs(&mut chain).unwrap();
-        client_root_cert_store.add_trust_anchors(certs.iter().map(|cert| {
-            let ta = webpki::TrustAnchor::try_from_cert_der(&cert[..]).unwrap();
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject,
-                ta.spki,
-                ta.name_constraints,
-            )
-        }));
+        for cert in certs(&mut chain) {
+            client_root_cert_store.add(cert.unwrap()).unwrap();
+        }
 
         let cconfig = ClientConfig::builder()
             .with_safe_defaults()
