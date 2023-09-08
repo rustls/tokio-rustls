@@ -1,11 +1,13 @@
-use crate::common::{Stream, TlsState};
-use rustls::{ConnectionCommon, SideData};
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{io, mem};
+
+use rustls::{ConnectionCommon, SideData};
 use tokio::io::{AsyncRead, AsyncWrite};
+
+use crate::common::{Stream, TlsState};
 
 pub(crate) trait IoSession {
     type Io;
