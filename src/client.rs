@@ -1,9 +1,15 @@
-use super::*;
-use crate::common::IoSession;
+use std::io;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, RawSocket};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use rustls::ClientConnection;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+use crate::common::{IoSession, Stream, TlsState};
 
 /// A wrapper around an underlying raw stream which implements the TLS or SSL
 /// protocol.

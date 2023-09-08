@@ -1,12 +1,13 @@
-mod handshake;
-
-pub(crate) use handshake::{IoSession, MidHandshake};
-use rustls::{ConnectionCommon, SideData};
 use std::io::{self, IoSlice, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use rustls::{ConnectionCommon, SideData};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+mod handshake;
+pub(crate) use handshake::{IoSession, MidHandshake};
 
 #[derive(Debug)]
 pub enum TlsState {

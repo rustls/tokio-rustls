@@ -1,11 +1,13 @@
-use super::Stream;
-use futures_util::future::poll_fn;
-use futures_util::task::noop_waker_ref;
-use rustls::{ClientConnection, Connection, ServerConnection};
 use std::io::{self, Cursor, Read, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use futures_util::future::poll_fn;
+use futures_util::task::noop_waker_ref;
+use rustls::{ClientConnection, Connection, ServerConnection};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+
+use super::Stream;
 
 struct Good<'a>(&'a mut Connection);
 
