@@ -14,7 +14,7 @@ exclude = ["/.github", "/examples", "/scripts"]
 
 [dependencies]
 tokio = "1.0"
-rustls = { version = "=0.22.0-alpha.2", default-features = false }
+rustls = { git = "https://github.com/rustls/rustls", branch = "jbp-generalise-crypto-usage-pt4", version = "0.22.0-alpha.2", default-features = false }
 
 [features]
 default = ["logging", "tls12"]
