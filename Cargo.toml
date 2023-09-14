@@ -14,15 +14,7 @@ exclude = ["/.github", "/examples", "/scripts"]
 
 [dependencies]
 tokio = "1.0"
-rustls = { git = "https://github.com/rustls/rustls", branch = "jbp-generalise-crypto-usage-pt4", version = "0.22.0-alpha.2", default-features = false }
-
-[features]
-default = ["logging", "tls12"]
-dangerous_configuration = ["rustls/dangerous_configuration"]
-early-data = []
-logging = ["rustls/logging"]
-secret_extraction = ["rustls/secret_extraction"]
-tls12 = ["rustls/tls12"]
+rustls = { git = "https://github.com/stevefan1999-personal/rustls", branch = "jbp-generalise-crypto-usage-pt4", version = "0.22.0-alpha.2", default-features = false }
 
 [dev-dependencies]
 argh = "0.1"
@@ -31,4 +23,14 @@ futures-util = "0.3.1"
 lazy_static = "1"
 webpki-roots = "=0.26.0-alpha.1"
 rustls-pemfile = "=2.0.0-alpha.1"
-webpki = { package = "rustls-webpki", version = "=0.102.0-alpha.2", features = ["alloc", "std"] }
+webpki = { package = "rustls-webpki", version = "=0.102.0-alpha.2", default-features = false }
+
+[features]
+default = ["logging", "tls12", "std"]
+dangerous_configuration = ["rustls/dangerous_configuration"]
+early-data = []
+logging = ["rustls/logging"]
+secret_extraction = ["rustls/secret_extraction"]
+tls12 = ["rustls/tls12"]
+std = ["rustls/std", "webpki/std"]
+alloc = ["rustls/alloc", "webpki/alloc"]
