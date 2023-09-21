@@ -24,7 +24,7 @@ secret_extraction = ["rustls/secret_extraction"]
 tls12 = ["rustls/tls12"]
 
 [dev-dependencies]
-argh = "0.1.1"
+argh = "0.1"
 tokio = { version = "1.0", features = ["full"] }
 futures-util = "0.3.1"
 lazy_static = "1.1"
