@@ -17,12 +17,12 @@ tokio = "1.0"
 rustls = { version = "=0.22.0-alpha.3", default-features = false }
 
 [features]
-default = ["logging", "tls12"]
+default = ["logging", "tls12", "ring"]
 early-data = []
 logging = ["rustls/logging"]
+ring = ["rustls/ring"]
 secret_extraction = ["rustls/secret_extraction"]
 tls12 = ["rustls/tls12"]
-ring = ["rustls/ring"]
 
 [dev-dependencies]
 argh = "0.1.1"
