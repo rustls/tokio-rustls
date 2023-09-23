@@ -83,11 +83,7 @@ fn start_server() -> &'static (SocketAddr, &'static str, &'static [u8]) {
     &TEST_SERVER
 }
 
-async fn start_client(
-    addr: SocketAddr,
-    domain: &str,
-    config: Arc<ClientConfig>,
-) -> io::Result<()> {
+async fn start_client(addr: SocketAddr, domain: &str, config: Arc<ClientConfig>) -> io::Result<()> {
     const FILE: &[u8] = include_bytes!("../README.md");
 
     let domain = rustls::ServerName::try_from(domain).unwrap();
