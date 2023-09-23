@@ -14,13 +14,13 @@ exclude = ["/.github", "/examples", "/scripts"]
 
 [dependencies]
 tokio = "1.0"
-rustls = { version = "=0.22.0-alpha.2", default-features = false }
+rustls = { version = "=0.22.0-alpha.3", default-features = false }
 
 [features]
-default = ["logging", "tls12"]
-dangerous_configuration = ["rustls/dangerous_configuration"]
+default = ["logging", "tls12", "ring"]
 early-data = []
 logging = ["rustls/logging"]
+ring = ["rustls/ring"]
 secret_extraction = ["rustls/secret_extraction"]
 tls12 = ["rustls/tls12"]
 
@@ -31,4 +31,4 @@ futures-util = "0.3.1"
 lazy_static = "1.1"
 webpki-roots = "=0.26.0-alpha.1"
 rustls-pemfile = "=2.0.0-alpha.1"
-webpki = { package = "rustls-webpki", version = "=0.102.0-alpha.2", features = ["alloc", "std"] }
+webpki = { package = "rustls-webpki", version = "=0.102.0-alpha.3", features = ["alloc", "std"] }

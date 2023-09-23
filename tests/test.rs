@@ -7,7 +7,6 @@ use std::{io, thread};
 
 use futures_util::future::TryFutureExt;
 use lazy_static::lazy_static;
-use rustls::crypto::ring::Ring;
 use rustls::ClientConfig;
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::io::{copy, split, AsyncReadExt, AsyncWriteExt};
@@ -84,11 +83,7 @@ fn start_server() -> &'static (SocketAddr, &'static str, &'static [u8]) {
     &TEST_SERVER
 }
 
-async fn start_client(
-    addr: SocketAddr,
-    domain: &str,
-    config: Arc<ClientConfig<Ring>>,
-) -> io::Result<()> {
+async fn start_client(addr: SocketAddr, domain: &str, config: Arc<ClientConfig>) -> io::Result<()> {
     const FILE: &[u8] = include_bytes!("../README.md");
 
     let domain = rustls::ServerName::try_from(domain).unwrap();
