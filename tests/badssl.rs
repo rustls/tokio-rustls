@@ -2,7 +2,6 @@ use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
-use rustls::crypto::ring::Ring;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::{
@@ -12,7 +11,7 @@ use tokio_rustls::{
 };
 
 async fn get(
-    config: Arc<ClientConfig<Ring>>,
+    config: Arc<ClientConfig>,
     domain: &str,
     port: u16,
 ) -> io::Result<(TlsStream<TcpStream>, String)> {
@@ -35,7 +34,7 @@ async fn get(
 #[tokio::test]
 async fn test_tls12() -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
-    root_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = rustls::ClientConfig::builder()
         .with_safe_default_cipher_suites()
         .with_safe_default_kx_groups()
@@ -67,7 +66,7 @@ fn test_tls13() {
 #[tokio::test]
 async fn test_modern() -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
-    root_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_root_certificates(root_store)

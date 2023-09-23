@@ -22,6 +22,7 @@ early-data = []
 logging = ["rustls/logging"]
 secret_extraction = ["rustls/secret_extraction"]
 tls12 = ["rustls/tls12"]
+ring = ["rustls/ring"]
 
 [dev-dependencies]
 argh = "0.1.1"

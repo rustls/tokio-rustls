@@ -2,12 +2,11 @@ mod utils {
     use std::io::{BufReader, Cursor};
     use std::sync::Arc;
 
-    use rustls::crypto::ring::Ring;
     use rustls::{ClientConfig, RootCertStore, ServerConfig};
     use rustls_pemfile::{certs, rsa_private_keys};
 
     #[allow(dead_code)]
-    pub fn make_configs() -> (Arc<ServerConfig<Ring>>, Arc<ClientConfig<Ring>>) {
+    pub fn make_configs() -> (Arc<ServerConfig>, Arc<ClientConfig>) {
         const CERT: &str = include_str!("end.cert");
         const CHAIN: &str = include_str!("end.chain");
         const RSA: &str = include_str!("end.rsa");

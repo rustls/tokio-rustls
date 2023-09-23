@@ -210,7 +210,6 @@ where
     /// # Example
     ///
     /// ```no_run
-    /// # use rustls::crypto::ring::Ring;
     /// # fn choose_server_config(
     /// #     _: rustls::server::ClientHello,
     /// # ) -> std::sync::Arc<rustls::ServerConfig> {

@@ -48,7 +48,7 @@ async fn main() -> io::Result<()> {
             root_cert_store.add(cert?).unwrap();
         }
     } else {
-        root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     }
 
     let config = rustls::ClientConfig::builder()
