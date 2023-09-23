@@ -10,7 +10,6 @@ use std::thread;
 use std::time::Duration;
 
 use futures_util::{future, future::Future, ready};
-use rustls::crypto::ring::Ring;
 use rustls::{self, ClientConfig, RootCertStore};
 use tokio::io::{split, AsyncRead, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
@@ -39,7 +38,7 @@ impl<T: AsyncRead + Unpin> Future for Read1<T> {
 }
 
 async fn send(
-    config: Arc<ClientConfig<Ring>>,
+    config: Arc<ClientConfig>,
     addr: SocketAddr,
     data: &[u8],
 ) -> io::Result<TlsStream<TcpStream>> {
