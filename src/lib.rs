@@ -222,7 +222,7 @@ where
     /// let (stream, _) = listener.accept().await.unwrap();
     ///
     /// let acceptor = tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream);
-    /// futures_util::pin_mut!(acceptor);
+    /// tokio::pin!(acceptor);
     ///
     /// match acceptor.as_mut().await {
     ///     Ok(start) => {
