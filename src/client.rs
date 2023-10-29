@@ -1,4 +1,5 @@
 use std::io;
+use std::io::{Error, IoSlice};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -141,6 +142,72 @@ impl<IO> AsyncWrite for TlsStream<IO>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<Result<usize, Error>> {
+        let this = self.get_mut();
+        let mut stream =
+            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+
+        #[allow(clippy::match_single_binding)]
+        match this.state {
+            #[cfg(feature = "early-data")]
+            TlsState::EarlyData(ref mut pos, ref mut data) => {
+                use std::io::Write;
+
+                // write early data
+                if let Some(mut early_data) = stream.session.early_data() {
+                    let mut written = 0;
+
+                    for buf in bufs {
+                        let len = early_data.write(buf)?;
+                        data.extend_from_slice(&buf[..len]);
+
+                        // If we didn't write the entire buffer, return early.
+                        if len != buf.len() {
+                            return Poll::Ready(Ok(written));
+                        }
+
+                        written += len;
+                    }
+
+                    if written != 0 {
+                        return Poll::Ready(Ok(written));
+                    }
+                }
+
+                // complete handshake
+                while stream.session.is_handshaking() {
+                    ready!(stream.handshake(cx))?;
+                }
+
+                // write early data (fallback)
+                if !stream.session.is_early_data_accepted() {
+                    while *pos < data.len() {
+                        let len = ready!(stream.as_mut_pin().poll_write(cx, &data[*pos..]))?; // No need for vectored write here.
+                        *pos += len;
+                    }
+                }
+
+                // end
+                this.state = TlsState::Stream;
+
+                if let Some(waker) = this.early_waker.take() {
+                    waker.wake();
+                }
+
+                stream.as_mut_pin().poll_write_vectored(cx, bufs)
+            }
+            _ => stream.as_mut_pin().poll_write_vectored(cx, bufs),
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        true // We know that `Stream` has an efficient `poll_write_vectored` implementation.
+    }
+
     /// Note: that it does not guarantee the final data to be sent.
     /// To be cautious, you must manually call `flush`.
     fn poll_write(

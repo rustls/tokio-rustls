@@ -38,6 +38,7 @@
 
 use std::future::Future;
 use std::io;
+use std::io::{Error, IoSlice};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -532,6 +533,24 @@ where
         match self.get_mut() {
             TlsStream::Client(x) => Pin::new(x).poll_write(cx, buf),
             TlsStream::Server(x) => Pin::new(x).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<Result<usize, Error>> {
+        match self.get_mut() {
+            TlsStream::Client(x) => Pin::new(x).poll_write_vectored(cx, bufs),
+            TlsStream::Server(x) => Pin::new(x).poll_write_vectored(cx, bufs),
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        match &self {
+            TlsStream::Client(x) => x.is_write_vectored(),
+            TlsStream::Server(x) => x.is_write_vectored(),
         }
     }
 

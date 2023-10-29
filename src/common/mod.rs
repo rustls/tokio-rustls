@@ -1,4 +1,4 @@
-use std::io::{self, IoSlice, Read, Write};
+use std::io::{self, Error, IoSlice, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -321,6 +321,28 @@ where
         }
 
         Poll::Ready(Ok(pos))
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<Result<usize, Error>> {
+        let written = self.session.writer().write_vectored(bufs)?;
+
+        while self.session.wants_write() {
+            match self.write_io(cx) {
+                Poll::Ready(Ok(0)) | Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(_)) => (),
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+            }
+        }
+
+        Poll::Ready(Ok(written))
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        true
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
