@@ -160,10 +160,8 @@ where
 
                 // write early data
                 if let Some(mut early_data) = stream.session.early_data() {
-                    let len = match early_data.write(buf) {
-                        Ok(n) => n,
-                        Err(err) => return Poll::Ready(Err(err)),
-                    };
+                    let len = early_data.write(buf)?;
+
                     if len != 0 {
                         data.extend_from_slice(&buf[..len]);
                         return Poll::Ready(Ok(len));
