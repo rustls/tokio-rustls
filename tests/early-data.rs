@@ -44,7 +44,7 @@ async fn send(
 ) -> io::Result<TlsStream<TcpStream>> {
     let connector = TlsConnector::from(config).early_data(true);
     let stream = TcpStream::connect(&addr).await?;
-    let domain = rustls::ServerName::try_from("foobar.com").unwrap();
+    let domain = pki_types::ServerName::try_from("foobar.com").unwrap();
 
     let stream = connector.connect(domain, stream).await?;
     let (mut rd, mut wd) = split(stream);

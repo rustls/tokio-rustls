@@ -61,8 +61,9 @@ async fn main() -> io::Result<()> {
 
     let (mut stdin, mut stdout) = (tokio_stdin(), tokio_stdout());
 
-    let domain = rustls::ServerName::try_from(domain.as_str())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid dnsname"))?;
+    let domain = pki_types::ServerName::try_from(domain.as_str())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid dnsname"))?
+        .to_owned();
 
     let mut stream = connector.connect(domain, stream).await?;
     stream.write_all(content.as_bytes()).await?;

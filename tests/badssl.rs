@@ -19,7 +19,7 @@ async fn get(
     let input = format!("GET / HTTP/1.0\r\nHost: {}\r\n\r\n", domain);
 
     let addr = (domain, port).to_socket_addrs()?.next().unwrap();
-    let domain = rustls::ServerName::try_from(domain).unwrap();
+    let domain = pki_types::ServerName::try_from(domain).unwrap().to_owned();
     let mut buf = Vec::new();
 
     let stream = TcpStream::connect(&addr).await?;

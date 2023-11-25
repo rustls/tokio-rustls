@@ -86,7 +86,7 @@ fn start_server() -> &'static (SocketAddr, &'static str, &'static [u8]) {
 async fn start_client(addr: SocketAddr, domain: &str, config: Arc<ClientConfig>) -> io::Result<()> {
     const FILE: &[u8] = include_bytes!("../README.md");
 
-    let domain = rustls::ServerName::try_from(domain).unwrap();
+    let domain = pki_types::ServerName::try_from(domain).unwrap().to_owned();
     let config = TlsConnector::from(config);
     let mut buf = vec![0; FILE.len()];
 
@@ -154,7 +154,9 @@ async fn test_lazy_config_acceptor() -> io::Result<()> {
     let (sconfig, cconfig) = utils::make_configs();
 
     let (cstream, sstream) = tokio::io::duplex(1200);
-    let domain = rustls::ServerName::try_from("foobar.com").unwrap();
+    let domain = pki_types::ServerName::try_from("foobar.com")
+        .unwrap()
+        .to_owned();
     tokio::spawn(async move {
         let connector = crate::TlsConnector::from(cconfig);
         let mut client = connector.connect(domain, cstream).await.unwrap();
