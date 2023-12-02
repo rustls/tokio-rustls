@@ -19,7 +19,6 @@ mod utils {
             .unwrap()
             .unwrap();
         let sconfig = ServerConfig::builder()
-            .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(cert, key.into())
             .unwrap();
@@ -31,7 +30,6 @@ mod utils {
         }
 
         let cconfig = ClientConfig::builder()
-            .with_safe_defaults()
             .with_root_certificates(client_root_cert_store)
             .with_no_client_auth();
 

@@ -56,7 +56,6 @@ async fn main() -> io::Result<()> {
     let flag_echo = options.echo_mode;
 
     let config = rustls::ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
