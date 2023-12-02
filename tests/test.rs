@@ -30,7 +30,6 @@ lazy_static! {
             .unwrap();
 
         let config = rustls::ServerConfig::builder()
-            .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(cert, key.into())
             .unwrap();
@@ -117,7 +116,6 @@ async fn pass() -> io::Result<()> {
     }
 
     let config = rustls::ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(root_store)
         .with_no_client_auth();
     let config = Arc::new(config);
@@ -137,7 +135,6 @@ async fn fail() -> io::Result<()> {
     }
 
     let config = rustls::ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(root_store)
         .with_no_client_auth();
     let config = Arc::new(config);

@@ -35,11 +35,7 @@ async fn get(
 async fn test_tls12() -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = rustls::ClientConfig::builder()
-        .with_safe_default_cipher_suites()
-        .with_safe_default_kx_groups()
-        .with_protocol_versions(&[&rustls::version::TLS12])
-        .unwrap()
+    let config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
@@ -68,7 +64,6 @@ async fn test_modern() -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = rustls::ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(root_store)
         .with_no_client_auth();
     let config = Arc::new(config);

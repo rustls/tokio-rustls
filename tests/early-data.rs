@@ -133,13 +133,10 @@ async fn test_0rtt() -> io::Result<()> {
         root_store.add(cert.unwrap()).unwrap();
     }
 
-    let mut config = rustls::ClientConfig::builder()
-        .with_safe_default_cipher_suites()
-        .with_safe_default_kx_groups()
-        .with_protocol_versions(&[&rustls::version::TLS13])
-        .unwrap()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+    let mut config =
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
     config.enable_early_data = true;
     let config = Arc::new(config);
     let addr = SocketAddr::from(([127, 0, 0, 1], server_port));
