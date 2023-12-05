@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use argh::FromArgs;
+use pki_types::{CertificateDer, PrivateKeyDer};
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::io::{copy, sink, split, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
-use webpki::types::{CertificateDer, PrivateKeyDer};
 
 /// Tokio Rustls server example
 #[derive(FromArgs)]
