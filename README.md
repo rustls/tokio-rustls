@@ -12,23 +12,17 @@ Asynchronous TLS/SSL streams for [Tokio](https://tokio.rs/) using
 ### Basic Structure of a Client
 
 ```rust
+use rustls_pki_types::ServerName;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio_rustls::rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore, ServerName};
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 // ...
 
 let mut root_cert_store = RootCertStore::empty();
-root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-    OwnedTrustAnchor::from_subject_spki_name_constraints(
-        ta.subject,
-        ta.spki,
-        ta.name_constraints,
-    )
-}));
+root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 let config = ClientConfig::builder()
-    .with_safe_defaults()
     .with_root_certificates(root_cert_store)
     .with_no_client_auth();
 let connector = TlsConnector::from(Arc::new(config));
