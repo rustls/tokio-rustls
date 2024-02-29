@@ -335,7 +335,13 @@ where
         while self.session.wants_write() {
             ready!(self.write_io(cx))?;
         }
-        Pin::new(&mut self.io).poll_shutdown(cx)
+
+        Poll::Ready(match ready!(Pin::new(&mut self.io).poll_shutdown(cx)) {
+            Ok(()) => Ok(()),
+            // When trying to shutdown, not being connected seems fine
+            Err(err) if err.kind() == io::ErrorKind::NotConnected => Ok(()),
+            Err(err) => Err(err),
+        })
     }
 }
 
