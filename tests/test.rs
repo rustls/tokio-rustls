@@ -223,12 +223,16 @@ async fn lazy_config_acceptor_take_io() -> Result<(), rustls::Error> {
     }
 
     let server_msg = b"message from server";
+    let fatal_alert_decode_error = b"\x15\x03\x03\x00\x02\x02\x32";
 
     let some_io = acceptor.take_io();
     assert!(some_io.is_some(), "Expected Some(io)");
     some_io.unwrap().write_all(server_msg).await.unwrap();
 
-    assert_eq!(rx.await.unwrap(), server_msg);
+    assert_eq!(
+        rx.await.unwrap(),
+        [&fatal_alert_decode_error[..], &server_msg[..]].concat()
+    );
 
     assert!(
         acceptor.take_io().is_none(),
