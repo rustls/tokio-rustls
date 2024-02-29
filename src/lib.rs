@@ -288,8 +288,10 @@ where
                     return Poll::Ready(Ok(StartHandshake { accepted, io }));
                 }
                 Ok(None) => continue,
-                Err(err) => {
-                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidInput, err)))
+                Err((err, mut alert)) => {
+                    let mut writer = common::SyncWriteAdapter { io, cx };
+                    let _ = alert.write(&mut writer); // best effort
+                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidInput, err)));
                 }
             }
         }
@@ -319,9 +321,10 @@ where
     {
         let mut conn = match self.accepted.into_connection(config) {
             Ok(conn) => conn,
-            Err(error) => {
-                return Accept(MidHandshake::Error {
+            Err((error, alert)) => {
+                return Accept(MidHandshake::SendAlert {
                     io: self.io,
+                    alert,
                     // TODO(eliza): should this really return an `io::Error`?
                     // Probably not...
                     error: io::Error::new(io::ErrorKind::Other, error),
@@ -361,6 +364,7 @@ impl<IO> Connect<IO> {
     pub fn get_ref(&self) -> Option<&IO> {
         match &self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
+            MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
             MidHandshake::End => None,
         }
@@ -369,6 +373,7 @@ impl<IO> Connect<IO> {
     pub fn get_mut(&mut self) -> Option<&mut IO> {
         match &mut self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
+            MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
             MidHandshake::End => None,
         }
@@ -384,6 +389,7 @@ impl<IO> Accept<IO> {
     pub fn get_ref(&self) -> Option<&IO> {
         match &self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
+            MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
             MidHandshake::End => None,
         }
@@ -392,6 +398,7 @@ impl<IO> Accept<IO> {
     pub fn get_mut(&mut self) -> Option<&mut IO> {
         match &mut self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
+            MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
             MidHandshake::End => None,
         }
