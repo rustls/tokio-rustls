@@ -290,5 +290,37 @@ async fn acceptor_alert() {
     assert_eq!(received, [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x46]);
 }
 
+#[tokio::test]
+async fn lazy_config_acceptor_alert() {
+    // Intentionally small so that we have to call alert.write several times
+    let (mut cstream, sstream) = tokio::io::duplex(2);
+
+    let (tx, rx) = oneshot::channel();
+
+    tokio::spawn(async move {
+        // This is write instead of write_all because of the short duplex size, which is necessarily
+        // symmetrical. We never finish writing because the LazyConfigAcceptor returns an error
+        let _ = cstream.write(b"not tls").await;
+        let mut buf = Vec::new();
+        cstream.read_to_end(&mut buf).await.unwrap();
+        tx.send(buf).unwrap();
+    });
+
+    let acceptor = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), sstream);
+
+    let Ok(accept_result) = time::timeout(Duration::from_secs(3), acceptor).await else {
+        panic!("timeout");
+    };
+
+    assert!(accept_result.is_err());
+
+    let Ok(Ok(received)) = time::timeout(Duration::from_secs(3), rx).await else {
+        panic!("failed to receive");
+    };
+
+    let fatal_alert_decode_error = b"\x15\x03\x03\x00\x02\x02\x32";
+    assert_eq!(received, fatal_alert_decode_error)
+}
+
 // Include `utils` module
 include!("utils.rs");
