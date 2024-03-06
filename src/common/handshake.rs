@@ -52,9 +52,13 @@ where
                 mut alert,
                 error,
             } => {
-                let mut writer = SyncWriteAdapter { io: &mut io, cx };
-                let _ = alert.write(&mut writer); // best effort
-                return Poll::Ready(Err((error, io)));
+                return match alert.write(&mut SyncWriteAdapter { io: &mut io, cx }) {
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        *this = MidHandshake::SendAlert { io, error, alert };
+                        Poll::Pending
+                    }
+                    _ => Poll::Ready(Err((error, io))),
+                };
             }
             // Starting the handshake returned an error; fail the future immediately.
             MidHandshake::Error { io, error } => return Poll::Ready(Err((error, io))),
