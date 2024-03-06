@@ -327,7 +327,7 @@ where
                     alert,
                     // TODO(eliza): should this really return an `io::Error`?
                     // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
+                    error: io::Error::new(io::ErrorKind::InvalidData, error),
                 });
             }
         };
