@@ -51,15 +51,16 @@ where
                 mut io,
                 mut alert,
                 error,
-            } => {
-                return match alert.write(&mut SyncWriteAdapter { io: &mut io, cx }) {
-                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+            } => loop {
+                match alert.write(&mut SyncWriteAdapter { io: &mut io, cx }) {
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                         *this = MidHandshake::SendAlert { io, error, alert };
-                        Poll::Pending
+                        return Poll::Pending;
                     }
-                    _ => Poll::Ready(Err((error, io))),
+                    Err(_) | Ok(0) => return Poll::Ready(Err((error, io))),
+                    Ok(_) => {}
                 };
-            }
+            },
             // Starting the handshake returned an error; fail the future immediately.
             MidHandshake::Error { io, error } => return Poll::Ready(Err((error, io))),
             _ => panic!("unexpected polling after handshake"),
