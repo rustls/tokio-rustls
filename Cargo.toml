@@ -21,6 +21,7 @@ pki-types = { package = "rustls-pki-types", version = "1" }
 default = ["logging", "tls12", "ring"]
 aws-lc-rs = ["rustls/aws_lc_rs"]
 early-data = []
+fips = ["rustls/fips"]
 logging = ["rustls/logging"]
 ring = ["rustls/ring"]
 tls12 = ["rustls/tls12"]
