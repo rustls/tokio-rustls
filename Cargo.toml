@@ -18,7 +18,7 @@ rustls = { version = "0.23", default-features = false, features = ["std"] }
 pki-types = { package = "rustls-pki-types", version = "1" }
 
 [features]
-default = ["logging", "tls12", "ring"]
+default = ["logging", "tls12", "aws-lc-rs"]
 aws-lc-rs = ["rustls/aws_lc_rs"]
 early-data = []
 fips = ["rustls/fips"]
