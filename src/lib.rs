@@ -47,6 +47,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 pub use rustls;
+use rustls::server::AcceptedAlert;
 use rustls::{ClientConfig, ClientConnection, CommonState, ServerConfig, ServerConnection};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -195,6 +196,7 @@ impl TlsAcceptor {
 pub struct LazyConfigAcceptor<IO> {
     acceptor: rustls::server::Acceptor,
     io: Option<IO>,
+    alert: Option<(rustls::Error, AcceptedAlert)>,
 }
 
 impl<IO> LazyConfigAcceptor<IO>
@@ -206,6 +208,7 @@ where
         Self {
             acceptor,
             io: Some(io),
+            alert: None,
         }
     }
 
@@ -274,6 +277,22 @@ where
                 }
             };
 
+            if let Some((err, mut alert)) = this.alert.take() {
+                match alert.write(&mut common::SyncWriteAdapter { io, cx }) {
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        this.alert = Some((err, alert));
+                        return Poll::Pending;
+                    }
+                    Ok(0) | Err(_) => {
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)))
+                    }
+                    Ok(_) => {
+                        this.alert = Some((err, alert));
+                        continue;
+                    }
+                };
+            }
+
             let mut reader = common::SyncReadAdapter { io, cx };
             match this.acceptor.read_tls(&mut reader) {
                 Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()).into(),
@@ -287,11 +306,9 @@ where
                     let io = this.io.take().unwrap();
                     return Poll::Ready(Ok(StartHandshake { accepted, io }));
                 }
-                Ok(None) => continue,
-                Err((err, mut alert)) => {
-                    let mut writer = common::SyncWriteAdapter { io, cx };
-                    let _ = alert.write(&mut writer); // best effort
-                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidInput, err)));
+                Ok(None) => {}
+                Err((err, alert)) => {
+                    this.alert = Some((err, alert));
                 }
             }
         }
