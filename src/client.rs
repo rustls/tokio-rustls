@@ -152,48 +152,44 @@ where
         let mut stream =
             Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
 
-        #[allow(clippy::match_single_binding)]
-        match this.state {
-            #[cfg(feature = "early-data")]
-            TlsState::EarlyData(ref mut pos, ref mut data) => {
-                use std::io::Write;
+        #[cfg(feature = "early-data")]
+        if let TlsState::EarlyData(pos, data) = &mut this.state {
+            use std::io::Write;
 
-                // write early data
-                if let Some(mut early_data) = stream.session.early_data() {
-                    let len = match early_data.write(buf) {
-                        Ok(n) => n,
-                        Err(err) => return Poll::Ready(Err(err)),
-                    };
-                    if len != 0 {
-                        data.extend_from_slice(&buf[..len]);
-                        return Poll::Ready(Ok(len));
-                    }
+            // write early data
+            if let Some(mut early_data) = stream.session.early_data() {
+                let len = match early_data.write(buf) {
+                    Ok(n) => n,
+                    Err(err) => return Poll::Ready(Err(err)),
+                };
+                if len != 0 {
+                    data.extend_from_slice(&buf[..len]);
+                    return Poll::Ready(Ok(len));
                 }
-
-                // complete handshake
-                while stream.session.is_handshaking() {
-                    ready!(stream.handshake(cx))?;
-                }
-
-                // write early data (fallback)
-                if !stream.session.is_early_data_accepted() {
-                    while *pos < data.len() {
-                        let len = ready!(stream.as_mut_pin().poll_write(cx, &data[*pos..]))?;
-                        *pos += len;
-                    }
-                }
-
-                // end
-                this.state = TlsState::Stream;
-
-                if let Some(waker) = this.early_waker.take() {
-                    waker.wake();
-                }
-
-                stream.as_mut_pin().poll_write(cx, buf)
             }
-            _ => stream.as_mut_pin().poll_write(cx, buf),
+
+            // complete handshake
+            while stream.session.is_handshaking() {
+                ready!(stream.handshake(cx))?;
+            }
+
+            // write early data (fallback)
+            if !stream.session.is_early_data_accepted() {
+                while *pos < data.len() {
+                    let len = ready!(stream.as_mut_pin().poll_write(cx, &data[*pos..]))?;
+                    *pos += len;
+                }
+            }
+
+            // end
+            this.state = TlsState::Stream;
+
+            if let Some(waker) = this.early_waker.take() {
+                waker.wake();
+            }
         }
+
+        stream.as_mut_pin().poll_write(cx, buf)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -202,26 +198,24 @@ where
             Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
 
         #[cfg(feature = "early-data")]
-        {
-            if let TlsState::EarlyData(ref mut pos, ref mut data) = this.state {
-                // complete handshake
-                while stream.session.is_handshaking() {
-                    ready!(stream.handshake(cx))?;
-                }
+        if let TlsState::EarlyData(pos, data) = &mut this.state {
+            // complete handshake
+            while stream.session.is_handshaking() {
+                ready!(stream.handshake(cx))?;
+            }
 
-                // write early data (fallback)
-                if !stream.session.is_early_data_accepted() {
-                    while *pos < data.len() {
-                        let len = ready!(stream.as_mut_pin().poll_write(cx, &data[*pos..]))?;
-                        *pos += len;
-                    }
+            // write early data (fallback)
+            if !stream.session.is_early_data_accepted() {
+                while *pos < data.len() {
+                    let len = ready!(stream.as_mut_pin().poll_write(cx, &data[*pos..]))?;
+                    *pos += len;
                 }
+            }
 
-                this.state = TlsState::Stream;
+            this.state = TlsState::Stream;
 
-                if let Some(waker) = this.early_waker.take() {
-                    waker.wake();
-                }
+            if let Some(waker) = this.early_waker.take() {
+                waker.wake();
             }
         }
 
