@@ -37,13 +37,14 @@ async fn send(
     config: Arc<ClientConfig>,
     addr: SocketAddr,
     data: &[u8],
+    vectored: bool,
 ) -> io::Result<(TlsStream<TcpStream>, Vec<u8>)> {
     let connector = TlsConnector::from(config).early_data(true);
     let stream = TcpStream::connect(&addr).await?;
     let domain = pki_types::ServerName::try_from("foobar.com").unwrap();
 
     let mut stream = connector.connect(domain, stream).await?;
-    stream.write_all(data).await?;
+    utils::write(&mut stream, data, vectored).await?;
     stream.flush().await?;
     stream.shutdown().await?;
 
@@ -55,6 +56,15 @@ async fn send(
 
 #[tokio::test]
 async fn test_0rtt() -> io::Result<()> {
+    test_0rtt_impl(false).await
+}
+
+#[tokio::test]
+async fn test_0rtt_vectored() -> io::Result<()> {
+    test_0rtt_impl(true).await
+}
+
+async fn test_0rtt_impl(vectored: bool) -> io::Result<()> {
     let cert_chain = rustls_pemfile::certs(&mut Cursor::new(include_bytes!("end.cert")))
         .collect::<io::Result<Vec<_>>>()?;
     let key_der =
@@ -113,13 +123,16 @@ async fn test_0rtt() -> io::Result<()> {
     let config = Arc::new(config);
     let addr = SocketAddr::from(([127, 0, 0, 1], server_port));
 
-    let (io, buf) = send(config.clone(), addr, b"hello").await?;
+    let (io, buf) = send(config.clone(), addr, b"hello", vectored).await?;
     assert!(!io.get_ref().1.is_early_data_accepted());
     assert_eq!("LATE:hello", String::from_utf8_lossy(&buf));
 
-    let (io, buf) = send(config, addr, b"world!").await?;
+    let (io, buf) = send(config, addr, b"world!", vectored).await?;
     assert!(io.get_ref().1.is_early_data_accepted());
     assert_eq!("EARLY:world!LATE:", String::from_utf8_lossy(&buf));
 
     Ok(())
 }
+
+// Include `utils` module
+include!("utils.rs");

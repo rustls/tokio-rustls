@@ -156,12 +156,13 @@ where
 
         #[cfg(feature = "early-data")]
         {
+            let bufs = [io::IoSlice::new(buf)];
             let written = ready!(poll_handle_early_data(
                 &mut this.state,
                 &mut stream,
                 &mut this.early_waker,
                 cx,
-                buf
+                &bufs
             ))?;
             if written != 0 {
                 return Poll::Ready(Ok(written));
@@ -169,6 +170,39 @@ where
         }
 
         stream.as_mut_pin().poll_write(cx, buf)
+    }
+
+    /// Note: that it does not guarantee the final data to be sent.
+    /// To be cautious, you must manually call `flush`.
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let mut stream =
+            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+
+        #[cfg(feature = "early-data")]
+        {
+            let written = ready!(poll_handle_early_data(
+                &mut this.state,
+                &mut stream,
+                &mut this.early_waker,
+                cx,
+                bufs
+            ))?;
+            if written != 0 {
+                return Poll::Ready(Ok(written));
+            }
+        }
+
+        stream.as_mut_pin().poll_write_vectored(cx, bufs)
+    }
+
+    #[inline]
+    fn is_write_vectored(&self) -> bool {
+        true
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -215,7 +249,7 @@ fn poll_handle_early_data<IO>(
     stream: &mut Stream<IO, ClientConnection>,
     early_waker: &mut Option<Waker>,
     cx: &mut Context<'_>,
-    buf: &[u8],
+    bufs: &[io::IoSlice<'_>],
 ) -> Poll<io::Result<usize>>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
@@ -225,13 +259,29 @@ where
 
         // write early data
         if let Some(mut early_data) = stream.session.early_data() {
-            let len = match early_data.write(buf) {
-                Ok(n) => n,
-                Err(err) => return Poll::Ready(Err(err)),
-            };
-            if len != 0 {
+            let mut written = 0;
+
+            for buf in bufs {
+                if buf.is_empty() {
+                    continue;
+                }
+
+                let len = match early_data.write(buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(err) => return Poll::Ready(Err(err)),
+                };
+
+                written += len;
                 data.extend_from_slice(&buf[..len]);
-                return Poll::Ready(Ok(len));
+
+                if len < buf.len() {
+                    break;
+                }
+            }
+
+            if written != 0 {
+                return Poll::Ready(Ok(written));
             }
         }
 

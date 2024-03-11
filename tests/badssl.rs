@@ -14,6 +14,7 @@ async fn get(
     config: Arc<ClientConfig>,
     domain: &str,
     port: u16,
+    vectored: bool,
 ) -> io::Result<(TlsStream<TcpStream>, String)> {
     let connector = TlsConnector::from(config);
     let input = format!("GET / HTTP/1.0\r\nHost: {}\r\n\r\n", domain);
@@ -24,7 +25,7 @@ async fn get(
 
     let stream = TcpStream::connect(&addr).await?;
     let mut stream = connector.connect(domain, stream).await?;
-    stream.write_all(input.as_bytes()).await?;
+    utils::write(&mut stream, input.as_bytes(), vectored).await?;
     stream.flush().await?;
     stream.read_to_end(&mut buf).await?;
 
@@ -33,6 +34,15 @@ async fn get(
 
 #[tokio::test]
 async fn test_tls12() -> io::Result<()> {
+    test_tls12_impl(false).await
+}
+
+#[tokio::test]
+async fn test_tls12_vectored() -> io::Result<()> {
+    test_tls12_impl(true).await
+}
+
+async fn test_tls12_impl(vectored: bool) -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
@@ -42,7 +52,7 @@ async fn test_tls12() -> io::Result<()> {
     let config = Arc::new(config);
     let domain = "tls-v1-2.badssl.com";
 
-    let (_, output) = get(config.clone(), domain, 1012).await?;
+    let (_, output) = get(config.clone(), domain, 1012, vectored).await?;
     assert!(
         output.contains("<title>tls-v1-2.badssl.com</title>"),
         "failed badssl test, output: {}",
@@ -61,6 +71,15 @@ fn test_tls13() {
 
 #[tokio::test]
 async fn test_modern() -> io::Result<()> {
+    test_modern_impl(false).await
+}
+
+#[tokio::test]
+async fn test_modern_vectored() -> io::Result<()> {
+    test_modern_impl(true).await
+}
+
+async fn test_modern_impl(vectored: bool) -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = rustls::ClientConfig::builder()
@@ -69,7 +88,7 @@ async fn test_modern() -> io::Result<()> {
     let config = Arc::new(config);
     let domain = "mozilla-modern.badssl.com";
 
-    let (_, output) = get(config.clone(), domain, 443).await?;
+    let (_, output) = get(config.clone(), domain, 443, vectored).await?;
     assert!(
         output.contains("<title>mozilla-modern.badssl.com</title>"),
         "failed badssl test, output: {}",
@@ -78,3 +97,6 @@ async fn test_modern() -> io::Result<()> {
 
     Ok(())
 }
+
+// Include `utils` module
+include!("utils.rs");

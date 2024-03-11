@@ -565,6 +565,26 @@ where
     }
 
     #[inline]
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            TlsStream::Client(x) => Pin::new(x).poll_write_vectored(cx, bufs),
+            TlsStream::Server(x) => Pin::new(x).poll_write_vectored(cx, bufs),
+        }
+    }
+
+    #[inline]
+    fn is_write_vectored(&self) -> bool {
+        match self {
+            TlsStream::Client(x) => x.is_write_vectored(),
+            TlsStream::Server(x) => x.is_write_vectored(),
+        }
+    }
+
+    #[inline]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             TlsStream::Client(x) => Pin::new(x).poll_flush(cx),
