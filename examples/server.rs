@@ -9,8 +9,7 @@ use pki_types::{CertificateDer, PrivateKeyDer};
 use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::io::{copy, sink, split, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio_rustls::rustls;
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::{rustls, TlsAcceptor};
 
 /// Tokio Rustls server example
 #[derive(FromArgs)]
