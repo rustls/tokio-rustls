@@ -1,9 +1,10 @@
 mod utils {
-    use std::io::{BufReader, Cursor};
+    use std::io::{BufReader, Cursor, IoSlice};
     use std::sync::Arc;
 
     use rustls::{ClientConfig, RootCertStore, ServerConfig};
     use rustls_pemfile::{certs, rsa_private_keys};
+    use tokio::io::{self, AsyncWrite, AsyncWriteExt};
 
     #[allow(dead_code)]
     pub fn make_configs() -> (Arc<ServerConfig>, Arc<ClientConfig>) {
@@ -34,5 +35,30 @@ mod utils {
             .with_no_client_auth();
 
         (Arc::new(sconfig), Arc::new(cconfig))
+    }
+
+    #[allow(dead_code)]
+    pub async fn write<W: AsyncWrite + Unpin>(
+        w: &mut W,
+        data: &[u8],
+        vectored: bool,
+    ) -> io::Result<()> {
+        if !vectored {
+            return w.write_all(data).await;
+        }
+
+        let mut data = data;
+
+        while !data.is_empty() {
+            let chunk_size = (data.len() / 4).max(1);
+            let vectors = data
+                .chunks(chunk_size)
+                .map(IoSlice::new)
+                .collect::<Vec<_>>();
+            let written = w.write_vectored(&vectors).await?;
+            data = &data[written..];
+        }
+
+        Ok(())
     }
 }
