@@ -339,6 +339,10 @@ where
             ready!(self.write_io(cx))?;
         }
 
+        while self.session.wants_read() {
+            ready!(self.read_io(cx))?;
+        }
+
         Poll::Ready(match ready!(Pin::new(&mut self.io).poll_shutdown(cx)) {
             Ok(()) => Ok(()),
             // When trying to shutdown, not being connected seems fine
