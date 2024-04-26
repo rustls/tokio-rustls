@@ -264,7 +264,7 @@ async fn stream_handshake_regression_issues_77() -> io::Result<()> {
     let r = stream.handshake(&mut cx);
     assert_eq!(
         r.map_err(|err| err.kind()),
-        Poll::Ready(Err(io::ErrorKind::UnexpectedEof))
+        Poll::Ready(Err(io::ErrorKind::InvalidData))
     );
 
     Ok(()) as io::Result<()>
