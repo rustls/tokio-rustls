@@ -42,8 +42,13 @@ pin_project! {
 
 impl<IO> AsyncRead for TlsStreamEarlyWrapper<IO>
 where
-    IO: AsyncRead + AsyncWrite + Unpin {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    IO: AsyncRead + AsyncWrite + Unpin,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         return self.project().inner.poll_read_early_data(cx, buf);
     }
 }
@@ -103,7 +108,7 @@ async fn test_0rtt_impl(vectored: bool) -> io::Result<()> {
                 let stream = acceptor.accept(&mut sock).await.unwrap();
 
                 let mut buf = Vec::new();
-                let mut stream_wrapper = TlsStreamEarlyWrapper{ inner: stream };
+                let mut stream_wrapper = TlsStreamEarlyWrapper { inner: stream };
                 stream_wrapper.read_to_end(&mut buf).await.unwrap();
                 let mut stream = stream_wrapper.inner;
                 stream.write_all(b"EARLY:").await.unwrap();

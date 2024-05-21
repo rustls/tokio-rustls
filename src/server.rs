@@ -1,5 +1,4 @@
 use std::io;
-use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -107,6 +106,8 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        use std::io::Read;
+
         let this = self.get_mut();
         let mut stream =
             Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
@@ -132,11 +133,13 @@ where
 
                 if let Some(mut early_data) = stream.session.early_data() {
                     match early_data.read(buf.initialize_unfilled()) {
-                        Ok(n) => if n > 0 {
-                            buf.advance(n);
-                            return Poll::Ready(Ok(()));
+                        Ok(n) => {
+                            if n > 0 {
+                                buf.advance(n);
+                                return Poll::Ready(Ok(()));
+                            }
                         }
-                        Err(err) => return Poll::Ready(Err(err))
+                        Err(err) => return Poll::Ready(Err(err)),
                     }
                 }
 
@@ -144,7 +147,7 @@ where
                     return Poll::Pending;
                 }
 
-                return Poll::Ready(Ok(()));
+                Poll::Ready(Ok(()))
             }
             TlsState::ReadShutdown | TlsState::FullyShutdown => Poll::Ready(Ok(())),
             s => unreachable!("server TLS can not hit this state: {:?}", s),
