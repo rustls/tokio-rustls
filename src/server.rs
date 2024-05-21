@@ -1,4 +1,5 @@
 use std::io;
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -91,6 +92,61 @@ where
             }
             TlsState::ReadShutdown | TlsState::FullyShutdown => Poll::Ready(Ok(())),
             #[cfg(feature = "early-data")]
+            s => unreachable!("server TLS can not hit this state: {:?}", s),
+        }
+    }
+}
+
+#[cfg(feature = "early-data")]
+impl<IO> TlsStream<IO>
+where
+    IO: AsyncRead + AsyncWrite + Unpin,
+{
+    pub fn poll_read_early_data(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let mut stream =
+            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+
+        match &this.state {
+            TlsState::Stream | TlsState::WriteShutdown => {
+                {
+                    let mut stream = stream.as_mut_pin();
+
+                    while !stream.eof && stream.session.wants_read() {
+                        match stream.read_io(cx) {
+                            Poll::Ready(Ok(0)) => {
+                                break;
+                            }
+                            Poll::Ready(Ok(_)) => (),
+                            Poll::Pending => {
+                                break;
+                            }
+                            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                        }
+                    }
+                }
+
+                if let Some(mut early_data) = stream.session.early_data() {
+                    match early_data.read(buf.initialize_unfilled()) {
+                        Ok(n) => if n > 0 {
+                            buf.advance(n);
+                            return Poll::Ready(Ok(()));
+                        }
+                        Err(err) => return Poll::Ready(Err(err))
+                    }
+                }
+
+                if stream.session.is_handshaking() {
+                    return Poll::Pending;
+                }
+
+                return Poll::Ready(Ok(()));
+            }
+            TlsState::ReadShutdown | TlsState::FullyShutdown => Poll::Ready(Ok(())),
             s => unreachable!("server TLS can not hit this state: {:?}", s),
         }
     }

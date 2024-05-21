@@ -1,17 +1,17 @@
 #![cfg(feature = "early-data")]
 
-use std::io::{self, BufReader, Cursor, Read, Write};
-use std::net::{SocketAddr, TcpListener};
+use std::io::{self, BufReader, Cursor};
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::thread;
 
 use futures_util::{future::Future, ready};
-use rustls::{self, ClientConfig, RootCertStore, ServerConfig, ServerConnection, Stream};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
-use tokio::net::TcpStream;
-use tokio_rustls::{client::TlsStream, TlsConnector};
+use pin_project_lite::pin_project;
+use rustls::{self, ClientConfig, RootCertStore, ServerConfig};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::{client, server, TlsAcceptor, TlsConnector};
 
 struct Read1<T>(T);
 
@@ -33,12 +33,27 @@ impl<T: AsyncRead + Unpin> Future for Read1<T> {
     }
 }
 
+pin_project! {
+    struct TlsStreamEarlyWrapper<IO> {
+        #[pin]
+        inner: server::TlsStream<IO>
+    }
+}
+
+impl<IO> AsyncRead for TlsStreamEarlyWrapper<IO>
+where
+    IO: AsyncRead + AsyncWrite + Unpin {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        return self.project().inner.poll_read_early_data(cx, buf);
+    }
+}
+
 async fn send(
     config: Arc<ClientConfig>,
     addr: SocketAddr,
     data: &[u8],
     vectored: bool,
-) -> io::Result<(TlsStream<TcpStream>, Vec<u8>)> {
+) -> io::Result<(client::TlsStream<TcpStream>, Vec<u8>)> {
     let connector = TlsConnector::from(config).early_data(true);
     let stream = TcpStream::connect(&addr).await?;
     let domain = pki_types::ServerName::try_from("foobar.com").unwrap();
@@ -75,38 +90,33 @@ async fn test_0rtt_impl(vectored: bool) -> io::Result<()> {
         .unwrap();
     server.max_early_data_size = 8192;
     let server = Arc::new(server);
+    let acceptor = Arc::new(TlsAcceptor::from(server));
 
-    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
     let server_port = listener.local_addr().unwrap().port();
-    thread::spawn(move || loop {
-        let (mut sock, _addr) = listener.accept().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _addr) = listener.accept().await.unwrap();
 
-        let server = Arc::clone(&server);
-        thread::spawn(move || {
-            let mut conn = ServerConnection::new(server).unwrap();
-            conn.complete_io(&mut sock).unwrap();
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let stream = acceptor.accept(&mut sock).await.unwrap();
 
-            if let Some(mut early_data) = conn.early_data() {
                 let mut buf = Vec::new();
-                early_data.read_to_end(&mut buf).unwrap();
-                let mut stream = Stream::new(&mut conn, &mut sock);
-                stream.write_all(b"EARLY:").unwrap();
-                stream.write_all(&buf).unwrap();
-            }
+                let mut stream_wrapper = TlsStreamEarlyWrapper{ inner: stream };
+                stream_wrapper.read_to_end(&mut buf).await.unwrap();
+                let mut stream = stream_wrapper.inner;
+                stream.write_all(b"EARLY:").await.unwrap();
+                stream.write_all(&buf).await.unwrap();
 
-            let mut stream = Stream::new(&mut conn, &mut sock);
-            stream.write_all(b"LATE:").unwrap();
-            loop {
-                let mut buf = [0; 1024];
-                let n = stream.read(&mut buf).unwrap();
-                if n == 0 {
-                    conn.send_close_notify();
-                    conn.complete_io(&mut sock).unwrap();
-                    break;
-                }
-                stream.write_all(&buf[..n]).unwrap();
-            }
-        });
+                let mut buf = Vec::new();
+                stream.read_to_end(&mut buf).await.unwrap();
+                stream.write_all(b"LATE:").await.unwrap();
+                stream.write_all(&buf).await.unwrap();
+
+                stream.shutdown().await.unwrap();
+            });
+        }
     });
 
     let mut chain = BufReader::new(Cursor::new(include_str!("end.chain")));
@@ -125,7 +135,7 @@ async fn test_0rtt_impl(vectored: bool) -> io::Result<()> {
 
     let (io, buf) = send(config.clone(), addr, b"hello", vectored).await?;
     assert!(!io.get_ref().1.is_early_data_accepted());
-    assert_eq!("LATE:hello", String::from_utf8_lossy(&buf));
+    assert_eq!("EARLY:LATE:hello", String::from_utf8_lossy(&buf));
 
     let (io, buf) = send(config, addr, b"world!", vectored).await?;
     assert!(io.get_ref().1.is_early_data_accepted());
