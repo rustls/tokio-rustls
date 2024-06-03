@@ -156,6 +156,49 @@ impl TlsConnector {
             session,
         }))
     }
+
+    pub fn connect_with_stream<IO, F>(
+        &self,
+        domain: pki_types::ServerName<'static>,
+        mut stream: IO,
+        f: F,
+    ) -> Connect<IO>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin,
+        F: FnOnce(&mut ClientConnection, &mut IO),
+    {
+        let mut session = match ClientConnection::new(self.inner.clone(), domain) {
+            Ok(session) => session,
+            Err(error) => {
+                return Connect(MidHandshake::Error {
+                    io: stream,
+                    // TODO(eliza): should this really return an `io::Error`?
+                    // Probably not...
+                    error: io::Error::new(io::ErrorKind::Other, error),
+                });
+            }
+        };
+        f(&mut session, &mut stream);
+
+        Connect(MidHandshake::Handshaking(client::TlsStream {
+            io: stream,
+
+            #[cfg(not(feature = "early-data"))]
+            state: TlsState::Stream,
+
+            #[cfg(feature = "early-data")]
+            state: if self.early_data && session.early_data().is_some() {
+                TlsState::EarlyData(0, Vec::new())
+            } else {
+                TlsState::Stream
+            },
+
+            #[cfg(feature = "early-data")]
+            early_waker: None,
+
+            session,
+        }))
+    }
 }
 
 impl TlsAcceptor {
