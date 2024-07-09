@@ -4,6 +4,7 @@ on:
   push:
     branches:
     - main
+    - "*_dev"
   pull_request: {}
   schedule:
     - cron: "33 4 * * 5"
