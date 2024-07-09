@@ -23,7 +23,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Check
-        run: cargo check --all --all-features --all-targets
+        run: cargo check --locked --all --all-features --all-targets
 
   test:
     runs-on: ${{ matrix.os }}
@@ -55,8 +55,8 @@ jobs:
 
       - name: Test
         run: |
-          cargo test --all
-          cargo test -p tokio-rustls --features early-data --test early-data
+          cargo test --locked --all
+          cargo test --locked -p tokio-rustls --features early-data --test early-data
 
   lints:
     name: Lints
@@ -75,7 +75,7 @@ jobs:
 
       - name: Run cargo clippy
         if: always()
-        run: cargo clippy --all-features -- -D warnings
+        run: cargo clippy --locked --all-features -- -D warnings
 
   msrv:
     name: MSRV
@@ -88,4 +88,4 @@ jobs:
         with:
           toolchain: "1.63"
 
-      - run: cargo check --lib --all-features
+      - run: cargo check --locked --lib --all-features
