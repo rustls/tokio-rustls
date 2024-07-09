@@ -15,9 +15,9 @@ use tokio::sync::oneshot;
 use tokio::{runtime, time};
 use tokio_rustls::{LazyConfigAcceptor, TlsAcceptor, TlsConnector};
 
-const CERT: &str = include_str!("end.cert");
-const CHAIN: &[u8] = include_bytes!("end.chain");
-const RSA: &str = include_str!("end.rsa");
+const CERT: &str = include_str!("certs/end.cert");
+const CHAIN: &[u8] = include_bytes!("certs/end.chain");
+const RSA: &str = include_str!("certs/end.rsa");
 
 lazy_static! {
     static ref TEST_SERVER: (SocketAddr, &'static str, &'static [u8]) = {

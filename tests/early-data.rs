@@ -65,10 +65,10 @@ async fn test_0rtt_vectored() -> io::Result<()> {
 }
 
 async fn test_0rtt_impl(vectored: bool) -> io::Result<()> {
-    let cert_chain = rustls_pemfile::certs(&mut Cursor::new(include_bytes!("end.cert")))
+    let cert_chain = rustls_pemfile::certs(&mut Cursor::new(include_bytes!("certs/end.cert")))
         .collect::<io::Result<Vec<_>>>()?;
     let key_der =
-        rustls_pemfile::private_key(&mut Cursor::new(include_bytes!("end.rsa")))?.unwrap();
+        rustls_pemfile::private_key(&mut Cursor::new(include_bytes!("certs/end.rsa")))?.unwrap();
     let mut server = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key_der)
@@ -109,7 +109,7 @@ async fn test_0rtt_impl(vectored: bool) -> io::Result<()> {
         });
     });
 
-    let mut chain = BufReader::new(Cursor::new(include_str!("end.chain")));
+    let mut chain = BufReader::new(Cursor::new(include_str!("certs/end.chain")));
     let mut root_store = RootCertStore::empty();
     for cert in rustls_pemfile::certs(&mut chain) {
         root_store.add(cert.unwrap()).unwrap();
