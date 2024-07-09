@@ -1,12 +1,12 @@
 use std::fs::File;
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, ErrorKind};
 use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use argh::FromArgs;
 use pki_types::{CertificateDer, PrivateKeyDer};
-use rustls_pemfile::{certs, rsa_private_keys};
+use rustls_pemfile::{certs, private_key};
 use tokio::io::{copy, sink, split, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::{rustls, TlsAcceptor};
@@ -35,11 +35,13 @@ fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
     certs(&mut BufReader::new(File::open(path)?)).collect()
 }
 
-fn load_keys(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
-    rsa_private_keys(&mut BufReader::new(File::open(path)?))
-        .next()
+fn load_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
+    Ok(private_key(&mut BufReader::new(File::open(path)?))
         .unwrap()
-        .map(Into::into)
+        .ok_or(io::Error::new(
+            ErrorKind::Other,
+            "no private key found".to_string(),
+        ))?)
 }
 
 #[tokio::main]
@@ -52,7 +54,7 @@ async fn main() -> io::Result<()> {
         .next()
         .ok_or_else(|| io::Error::from(io::ErrorKind::AddrNotAvailable))?;
     let certs = load_certs(&options.cert)?;
-    let key = load_keys(&options.key)?;
+    let key = load_key(&options.key)?;
     let flag_echo = options.echo_mode;
 
     let config = rustls::ServerConfig::builder()
