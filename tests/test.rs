@@ -14,10 +14,8 @@ use tokio::sync::oneshot;
 use tokio::{runtime, time};
 use tokio_rustls::{LazyConfigAcceptor, TlsAcceptor, TlsConnector};
 
-const CHAIN: &[u8] = include_bytes!("certs/end.chain");
-
 lazy_static! {
-    static ref TEST_SERVER: (SocketAddr, &'static str, &'static [u8]) = {
+    static ref TEST_SERVER: SocketAddr = {
         let (config, _) = utils::make_configs();
         let acceptor = TlsAcceptor::from(Arc::new(config));
 
@@ -59,13 +57,8 @@ lazy_static! {
             runtime.block_on(done);
         });
 
-        let addr = recv.recv().unwrap();
-        (addr, "foobar.com", CHAIN)
+        recv.recv().unwrap()
     };
-}
-
-fn start_server() -> &'static (SocketAddr, &'static str, &'static [u8]) {
-    &TEST_SERVER
 }
 
 async fn start_client(addr: SocketAddr, domain: &str, config: Arc<ClientConfig>) -> io::Result<()> {
@@ -88,8 +81,6 @@ async fn start_client(addr: SocketAddr, domain: &str, config: Arc<ClientConfig>)
 
 #[tokio::test]
 async fn pass() -> io::Result<()> {
-    let (addr, domain, _) = start_server();
-
     // TODO: not sure how to resolve this right now but since
     // TcpStream::bind now returns a future it creates a race
     // condition until its ready sometimes.
@@ -99,20 +90,18 @@ async fn pass() -> io::Result<()> {
     let (_, config) = utils::make_configs();
     let config = Arc::new(config);
 
-    start_client(*addr, domain, config).await?;
+    start_client(*TEST_SERVER, utils::TEST_SERVER_DOMAIN, config).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn fail() -> io::Result<()> {
-    let (addr, domain, _) = start_server();
-
     let (_, config) = utils::make_configs();
     let config = Arc::new(config);
 
-    assert_ne!(domain, &"google.com");
-    let ret = start_client(*addr, "google.com", config).await;
+    assert_ne!(utils::TEST_SERVER_DOMAIN, "google.com");
+    let ret = start_client(*TEST_SERVER, "google.com", config).await;
     assert!(ret.is_err());
 
     Ok(())
