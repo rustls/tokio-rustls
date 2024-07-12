@@ -1,6 +1,6 @@
 #![cfg(feature = "early-data")]
 
-use std::io::{self, BufReader, Cursor, Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 use std::thread;
 
 use futures_util::{future::Future, ready};
-use rustls::{self, ClientConfig, RootCertStore, ServerConfig, ServerConnection, Stream};
+use rustls::{self, ClientConfig, ServerConnection, Stream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::{client::TlsStream, TlsConnector};
@@ -65,14 +65,7 @@ async fn test_0rtt_vectored() -> io::Result<()> {
 }
 
 async fn test_0rtt_impl(vectored: bool) -> io::Result<()> {
-    let cert_chain = rustls_pemfile::certs(&mut Cursor::new(include_bytes!("certs/end.cert")))
-        .collect::<io::Result<Vec<_>>>()?;
-    let key_der =
-        rustls_pemfile::private_key(&mut Cursor::new(include_bytes!("certs/end.rsa")))?.unwrap();
-    let mut server = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key_der)
-        .unwrap();
+    let (mut server, mut client) = utils::make_configs();
     server.max_early_data_size = 8192;
     let server = Arc::new(server);
 
@@ -109,25 +102,15 @@ async fn test_0rtt_impl(vectored: bool) -> io::Result<()> {
         });
     });
 
-    let mut chain = BufReader::new(Cursor::new(include_str!("certs/end.chain")));
-    let mut root_store = RootCertStore::empty();
-    for cert in rustls_pemfile::certs(&mut chain) {
-        root_store.add(cert.unwrap()).unwrap();
-    }
-
-    let mut config =
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-    config.enable_early_data = true;
-    let config = Arc::new(config);
+    client.enable_early_data = true;
+    let client = Arc::new(client);
     let addr = SocketAddr::from(([127, 0, 0, 1], server_port));
 
-    let (io, buf) = send(config.clone(), addr, b"hello", vectored).await?;
+    let (io, buf) = send(client.clone(), addr, b"hello", vectored).await?;
     assert!(!io.get_ref().1.is_early_data_accepted());
     assert_eq!("LATE:hello", String::from_utf8_lossy(&buf));
 
-    let (io, buf) = send(config, addr, b"world!", vectored).await?;
+    let (io, buf) = send(client, addr, b"world!", vectored).await?;
     assert!(io.get_ref().1.is_early_data_accepted());
     assert_eq!("EARLY:world!LATE:", String::from_utf8_lossy(&buf));
 
