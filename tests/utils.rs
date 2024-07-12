@@ -7,14 +7,19 @@ mod utils {
 
     #[allow(dead_code)]
     pub fn make_configs() -> (ServerConfig, ClientConfig) {
-        const CERT: &str = include_str!("certs/end.cert");
-        const CHAIN: &str = include_str!("certs/end.chain");
-        const RSA: &str = include_str!("certs/end.rsa");
+        // A test root certificate that is the trust anchor for the CHAIN.
+        const ROOT: &str = include_str!("certs/root.pem");
+        // A server certificate chain that includes both an end-entity server certificate
+        // and the intermediate certificate that issued it. The ROOT is configured
+        // out-of-band.
+        const CHAIN: &str = include_str!("certs/chain.pem");
+        // A private key corresponding to the end-entity server certificate in CHAIN.
+        const EE_KEY: &str = include_str!("certs/end.key");
 
-        let cert = certs(&mut BufReader::new(Cursor::new(CERT)))
+        let cert = certs(&mut BufReader::new(Cursor::new(CHAIN)))
             .map(|result| result.unwrap())
             .collect();
-        let key = private_key(&mut BufReader::new(Cursor::new(RSA)))
+        let key = private_key(&mut BufReader::new(Cursor::new(EE_KEY)))
             .unwrap()
             .unwrap();
         let sconfig = ServerConfig::builder()
@@ -23,9 +28,9 @@ mod utils {
             .unwrap();
 
         let mut client_root_cert_store = RootCertStore::empty();
-        let mut chain = BufReader::new(Cursor::new(CHAIN));
-        for cert in certs(&mut chain) {
-            client_root_cert_store.add(cert.unwrap()).unwrap();
+        let mut roots = BufReader::new(Cursor::new(ROOT));
+        for root in certs(&mut roots) {
+            client_root_cert_store.add(root.unwrap()).unwrap();
         }
 
         let cconfig = ClientConfig::builder()
