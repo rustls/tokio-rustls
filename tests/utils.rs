@@ -2,7 +2,7 @@ mod utils {
     use std::io::{BufReader, Cursor, IoSlice};
 
     use rustls::{ClientConfig, RootCertStore, ServerConfig};
-    use rustls_pemfile::{certs, rsa_private_keys};
+    use rustls_pemfile::{certs, private_key};
     use tokio::io::{self, AsyncWrite, AsyncWriteExt};
 
     #[allow(dead_code)]
@@ -14,8 +14,7 @@ mod utils {
         let cert = certs(&mut BufReader::new(Cursor::new(CERT)))
             .map(|result| result.unwrap())
             .collect();
-        let key = rsa_private_keys(&mut BufReader::new(Cursor::new(RSA)))
-            .next()
+        let key = private_key(&mut BufReader::new(Cursor::new(RSA)))
             .unwrap()
             .unwrap();
         let sconfig = ServerConfig::builder()
