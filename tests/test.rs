@@ -1,4 +1,4 @@
-use std::io::{BufReader, Cursor, ErrorKind};
+use std::io::{Cursor, ErrorKind};
 use std::net::SocketAddr;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -8,31 +8,17 @@ use std::{io, thread};
 use futures_util::future::TryFutureExt;
 use lazy_static::lazy_static;
 use rustls::ClientConfig;
-use rustls_pemfile::{certs, rsa_private_keys};
 use tokio::io::{copy, split, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::{runtime, time};
 use tokio_rustls::{LazyConfigAcceptor, TlsAcceptor, TlsConnector};
 
-const CERT: &str = include_str!("certs/end.cert");
 const CHAIN: &[u8] = include_bytes!("certs/end.chain");
-const RSA: &str = include_str!("certs/end.rsa");
 
 lazy_static! {
     static ref TEST_SERVER: (SocketAddr, &'static str, &'static [u8]) = {
-        let cert = certs(&mut BufReader::new(Cursor::new(CERT)))
-            .map(|result| result.unwrap())
-            .collect();
-        let key = rsa_private_keys(&mut BufReader::new(Cursor::new(RSA)))
-            .next()
-            .unwrap()
-            .unwrap();
-
-        let config = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(cert, key.into())
-            .unwrap();
+        let (config, _) = utils::make_configs();
         let acceptor = TlsAcceptor::from(Arc::new(config));
 
         let (send, recv) = channel();
@@ -102,7 +88,7 @@ async fn start_client(addr: SocketAddr, domain: &str, config: Arc<ClientConfig>)
 
 #[tokio::test]
 async fn pass() -> io::Result<()> {
-    let (addr, domain, chain) = start_server();
+    let (addr, domain, _) = start_server();
 
     // TODO: not sure how to resolve this right now but since
     // TcpStream::bind now returns a future it creates a race
@@ -110,14 +96,7 @@ async fn pass() -> io::Result<()> {
     use std::time::*;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let mut root_store = rustls::RootCertStore::empty();
-    for cert in certs(&mut std::io::Cursor::new(*chain)) {
-        root_store.add(cert.unwrap()).unwrap();
-    }
-
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+    let (_, config) = utils::make_configs();
     let config = Arc::new(config);
 
     start_client(*addr, domain, config).await?;
@@ -127,16 +106,9 @@ async fn pass() -> io::Result<()> {
 
 #[tokio::test]
 async fn fail() -> io::Result<()> {
-    let (addr, domain, chain) = start_server();
+    let (addr, domain, _) = start_server();
 
-    let mut root_store = rustls::RootCertStore::empty();
-    for cert in certs(&mut std::io::Cursor::new(*chain)) {
-        root_store.add(cert.unwrap()).unwrap();
-    }
-
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+    let (_, config) = utils::make_configs();
     let config = Arc::new(config);
 
     assert_ne!(domain, &"google.com");
