@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-cd $1
+# change to the directory of this script
+cd "$(dirname "$0")"
 
 # prepare config file for root CA generation
 cat <<EOF >> root.cnf
