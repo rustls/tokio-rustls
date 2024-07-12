@@ -155,7 +155,7 @@ async fn test_lazy_config_acceptor() -> io::Result<()> {
         .unwrap()
         .to_owned();
     tokio::spawn(async move {
-        let connector = crate::TlsConnector::from(cconfig);
+        let connector = crate::TlsConnector::from(Arc::new(cconfig));
         let mut client = connector.connect(domain, cstream).await.unwrap();
         client.write_all(b"hello, world!").await.unwrap();
 
@@ -175,7 +175,7 @@ async fn test_lazy_config_acceptor() -> io::Result<()> {
         Vec::<&[u8]>::new()
     );
 
-    let mut stream = start.into_stream(sconfig).await.unwrap();
+    let mut stream = start.into_stream(Arc::new(sconfig)).await.unwrap();
     let mut buf = [0; 13];
     stream.read_exact(&mut buf).await.unwrap();
     assert_eq!(&buf[..], b"hello, world!");
@@ -279,7 +279,10 @@ async fn acceptor_alert() {
         panic!("timeout");
     };
 
-    let err = start_handshake.into_stream(sconfig).await.unwrap_err();
+    let err = start_handshake
+        .into_stream(Arc::new(sconfig))
+        .await
+        .unwrap_err();
 
     assert_eq!(err.to_string(), "peer is incompatible: Tls12NotOffered");
 
