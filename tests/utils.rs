@@ -1,13 +1,12 @@
 mod utils {
     use std::io::{BufReader, Cursor, IoSlice};
-    use std::sync::Arc;
 
     use rustls::{ClientConfig, RootCertStore, ServerConfig};
     use rustls_pemfile::{certs, rsa_private_keys};
     use tokio::io::{self, AsyncWrite, AsyncWriteExt};
 
     #[allow(dead_code)]
-    pub fn make_configs() -> (Arc<ServerConfig>, Arc<ClientConfig>) {
+    pub fn make_configs() -> (ServerConfig, ClientConfig) {
         const CERT: &str = include_str!("certs/end.cert");
         const CHAIN: &str = include_str!("certs/end.chain");
         const RSA: &str = include_str!("certs/end.rsa");
@@ -34,7 +33,7 @@ mod utils {
             .with_root_certificates(client_root_cert_store)
             .with_no_client_auth();
 
-        (Arc::new(sconfig), Arc::new(cconfig))
+        (sconfig, cconfig)
     }
 
     #[allow(dead_code)]

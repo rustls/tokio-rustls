@@ -1,5 +1,6 @@
 use std::io::{self, Cursor, Read, Write};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures_util::future::poll_fn;
@@ -291,10 +292,10 @@ async fn stream_eof() -> io::Result<()> {
 
 fn make_pair() -> (ServerConnection, ClientConnection) {
     let (sconfig, cconfig) = utils::make_configs();
-    let server = ServerConnection::new(sconfig).unwrap();
+    let server = ServerConnection::new(Arc::new(sconfig)).unwrap();
 
     let domain = pki_types::ServerName::try_from("foobar.com").unwrap();
-    let client = ClientConnection::new(cconfig, domain).unwrap();
+    let client = ClientConnection::new(Arc::new(cconfig), domain).unwrap();
 
     (server, client)
 }
