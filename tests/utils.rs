@@ -60,4 +60,7 @@ mod utils {
 
         Ok(())
     }
+
+    #[allow(dead_code)]
+    pub const TEST_SERVER_DOMAIN: &str = "foobar.com";
 }
