@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use argh::FromArgs;
+use pki_types::ServerName;
 use tokio::io::{copy, split, stdin as tokio_stdin, stdout as tokio_stdout, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::{rustls, TlsConnector};
@@ -60,7 +61,7 @@ async fn main() -> io::Result<()> {
 
     let (mut stdin, mut stdout) = (tokio_stdin(), tokio_stdout());
 
-    let domain = pki_types::ServerName::try_from(domain.as_str())
+    let domain = ServerName::try_from(domain.as_str())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid dnsname"))?
         .to_owned();
 

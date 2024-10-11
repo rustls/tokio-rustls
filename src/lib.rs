@@ -47,6 +47,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 pub use rustls;
+
+use pki_types::ServerName;
 use rustls::server::AcceptedAlert;
 use rustls::{ClientConfig, ClientConnection, CommonState, ServerConfig, ServerConnection};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -107,19 +109,14 @@ impl TlsConnector {
     }
 
     #[inline]
-    pub fn connect<IO>(&self, domain: pki_types::ServerName<'static>, stream: IO) -> Connect<IO>
+    pub fn connect<IO>(&self, domain: ServerName<'static>, stream: IO) -> Connect<IO>
     where
         IO: AsyncRead + AsyncWrite + Unpin,
     {
         self.connect_with(domain, stream, |_| ())
     }
 
-    pub fn connect_with<IO, F>(
-        &self,
-        domain: pki_types::ServerName<'static>,
-        stream: IO,
-        f: F,
-    ) -> Connect<IO>
+    pub fn connect_with<IO, F>(&self, domain: ServerName<'static>, stream: IO, f: F) -> Connect<IO>
     where
         IO: AsyncRead + AsyncWrite + Unpin,
         F: FnOnce(&mut ClientConnection),

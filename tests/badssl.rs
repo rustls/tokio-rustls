@@ -2,13 +2,12 @@ use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
+use pki_types::ServerName;
+use rustls::ClientConfig;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_rustls::{
-    client::TlsStream,
-    rustls::{self, ClientConfig},
-    TlsConnector,
-};
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::TlsConnector;
 
 async fn get(
     config: Arc<ClientConfig>,
@@ -20,7 +19,7 @@ async fn get(
     let input = format!("GET / HTTP/1.0\r\nHost: {}\r\n\r\n", domain);
 
     let addr = (domain, port).to_socket_addrs()?.next().unwrap();
-    let domain = pki_types::ServerName::try_from(domain).unwrap().to_owned();
+    let domain = ServerName::try_from(domain).unwrap().to_owned();
     let mut buf = Vec::new();
 
     let stream = TcpStream::connect(&addr).await?;

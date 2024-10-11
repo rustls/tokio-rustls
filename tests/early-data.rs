@@ -8,10 +8,12 @@ use std::task::{Context, Poll};
 use std::thread;
 
 use futures_util::{future::Future, ready};
+use pki_types::ServerName;
 use rustls::{self, ClientConfig, ServerConnection, Stream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
-use tokio_rustls::{client::TlsStream, TlsConnector};
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::TlsConnector;
 
 struct Read1<T>(T);
 
@@ -41,7 +43,7 @@ async fn send(
 ) -> io::Result<(TlsStream<TcpStream>, Vec<u8>)> {
     let connector = TlsConnector::from(config).early_data(true);
     let stream = TcpStream::connect(&addr).await?;
-    let domain = pki_types::ServerName::try_from("foobar.com").unwrap();
+    let domain = ServerName::try_from("foobar.com").unwrap();
 
     let mut stream = connector.connect(domain, stream).await?;
     utils::write(&mut stream, data, vectored).await?;

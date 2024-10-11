@@ -7,6 +7,7 @@ use std::{io, thread};
 
 use futures_util::future::TryFutureExt;
 use lazy_static::lazy_static;
+use pki_types::ServerName;
 use rustls::ClientConfig;
 use tokio::io::{copy, split, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -64,7 +65,7 @@ lazy_static! {
 async fn start_client(addr: SocketAddr, domain: &str, config: Arc<ClientConfig>) -> io::Result<()> {
     const FILE: &[u8] = include_bytes!("../README.md");
 
-    let domain = pki_types::ServerName::try_from(domain).unwrap().to_owned();
+    let domain = ServerName::try_from(domain).unwrap().to_owned();
     let config = TlsConnector::from(config);
     let mut buf = vec![0; FILE.len()];
 
@@ -112,9 +113,7 @@ async fn test_lazy_config_acceptor() -> io::Result<()> {
     let (sconfig, cconfig) = utils::make_configs();
 
     let (cstream, sstream) = tokio::io::duplex(1200);
-    let domain = pki_types::ServerName::try_from("foobar.com")
-        .unwrap()
-        .to_owned();
+    let domain = ServerName::try_from("foobar.com").unwrap().to_owned();
     tokio::spawn(async move {
         let connector = crate::TlsConnector::from(Arc::new(cconfig));
         let mut client = connector.connect(domain, cstream).await.unwrap();
