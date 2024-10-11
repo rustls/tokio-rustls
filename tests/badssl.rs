@@ -2,7 +2,7 @@ use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
-use pki_types::ServerName;
+use rustls::pki_types::ServerName;
 use rustls::ClientConfig;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

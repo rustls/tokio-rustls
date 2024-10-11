@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 use std::thread;
 
 use futures_util::{future::Future, ready};
-use pki_types::ServerName;
+use rustls::pki_types::ServerName;
 use rustls::{self, ClientConfig, ServerConnection, Stream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;

@@ -48,7 +48,7 @@ use std::task::{Context, Poll};
 
 pub use rustls;
 
-use pki_types::ServerName;
+use rustls::pki_types::ServerName;
 use rustls::server::AcceptedAlert;
 use rustls::{ClientConfig, ClientConnection, CommonState, ServerConfig, ServerConnection};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};

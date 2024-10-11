@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use argh::FromArgs;
-use pki_types::ServerName;
+use rustls::pki_types::ServerName;
 use tokio::io::{copy, split, stdin as tokio_stdin, stdout as tokio_stdout, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::{rustls, TlsConnector};
