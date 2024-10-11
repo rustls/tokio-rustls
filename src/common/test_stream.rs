@@ -5,6 +5,7 @@ use std::task::{Context, Poll};
 
 use futures_util::future::poll_fn;
 use futures_util::task::noop_waker_ref;
+use pki_types::ServerName;
 use rustls::{ClientConnection, Connection, ServerConnection};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
@@ -294,7 +295,7 @@ fn make_pair() -> (ServerConnection, ClientConnection) {
     let (sconfig, cconfig) = utils::make_configs();
     let server = ServerConnection::new(Arc::new(sconfig)).unwrap();
 
-    let domain = pki_types::ServerName::try_from("foobar.com").unwrap();
+    let domain = ServerName::try_from("foobar.com").unwrap();
     let client = ClientConnection::new(Arc::new(cconfig), domain).unwrap();
 
     (server, client)
