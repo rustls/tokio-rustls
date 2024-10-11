@@ -834,7 +834,6 @@ dependencies = [
  "rcgen",
  "rustls",
  "rustls-pemfile",
- "rustls-pki-types",
  "tokio",
  "webpki-roots",
 ]

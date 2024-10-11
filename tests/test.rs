@@ -7,7 +7,7 @@ use std::{io, thread};
 
 use futures_util::future::TryFutureExt;
 use lazy_static::lazy_static;
-use pki_types::ServerName;
+use rustls::pki_types::ServerName;
 use rustls::ClientConfig;
 use tokio::io::{copy, split, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
