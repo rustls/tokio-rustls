@@ -1,13 +1,12 @@
 use std::error::Error as StdError;
-use std::fs::File;
 use std::io;
-use std::io::BufReader;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use argh::FromArgs;
-use rustls::pki_types::ServerName;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, ServerName};
 use tokio::io::{copy, split, stdin as tokio_stdin, stdout as tokio_stdout, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::{rustls, TlsConnector};
@@ -45,8 +44,7 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
 
     let mut root_cert_store = rustls::RootCertStore::empty();
     if let Some(cafile) = &options.cafile {
-        let mut pem = BufReader::new(File::open(cafile)?);
-        for cert in rustls_pemfile::certs(&mut pem) {
+        for cert in CertificateDer::pem_file_iter(&cafile)? {
             root_cert_store.add(cert?)?;
         }
     } else {

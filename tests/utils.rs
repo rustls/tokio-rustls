@@ -1,8 +1,10 @@
 mod utils {
-    use std::io::{BufReader, Cursor, IoSlice};
+    use std::io::IoSlice;
 
-    use rustls::{ClientConfig, RootCertStore, ServerConfig};
-    use rustls_pemfile::{certs, private_key};
+    use rustls::{
+        pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer},
+        ClientConfig, RootCertStore, ServerConfig,
+    };
     use tokio::io::{self, AsyncWrite, AsyncWriteExt};
 
     #[allow(dead_code)]
@@ -16,20 +18,17 @@ mod utils {
         // A private key corresponding to the end-entity server certificate in CHAIN.
         const EE_KEY: &str = include_str!("certs/end.key");
 
-        let cert = certs(&mut BufReader::new(Cursor::new(CHAIN)))
-            .map(|result| result.unwrap())
-            .collect();
-        let key = private_key(&mut BufReader::new(Cursor::new(EE_KEY)))
-            .unwrap()
+        let cert = CertificateDer::pem_slice_iter(CHAIN.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(EE_KEY.as_bytes()).unwrap();
         let sconfig = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(cert, key.into())
             .unwrap();
 
         let mut client_root_cert_store = RootCertStore::empty();
-        let mut roots = BufReader::new(Cursor::new(ROOT));
-        for root in certs(&mut roots) {
+        for root in CertificateDer::pem_slice_iter(ROOT.as_bytes()) {
             client_root_cert_store.add(root.unwrap()).unwrap();
         }
 

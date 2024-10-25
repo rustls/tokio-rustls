@@ -1,13 +1,13 @@
-use std::fs::File;
-use std::io::{self, BufReader, ErrorKind};
+use std::io;
 use std::net::ToSocketAddrs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
+
 use std::error::Error as StdError;
+use std::sync::Arc;
 
 use argh::FromArgs;
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls_pemfile::{certs, private_key};
 use tokio::io::{copy, sink, split, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::{rustls, TlsAcceptor};
@@ -32,19 +32,6 @@ struct Options {
     echo_mode: bool,
 }
 
-fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
-    certs(&mut BufReader::new(File::open(path)?)).collect()
-}
-
-fn load_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
-    Ok(private_key(&mut BufReader::new(File::open(path)?))
-        .unwrap()
-        .ok_or(io::Error::new(
-            ErrorKind::Other,
-            "no private key found".to_string(),
-        ))?)
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     let options: Options = argh::from_env();
@@ -54,8 +41,8 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| io::Error::from(io::ErrorKind::AddrNotAvailable))?;
-    let certs = load_certs(&options.cert)?;
-    let key = load_key(&options.key)?;
+    let certs = CertificateDer::pem_file_iter(&options.cert)?.collect::<Result<Vec<_>, _>>()?;
+    let key = PrivateKeyDer::from_pem_file(&options.key)?;
     let flag_echo = options.echo_mode;
 
     let config = rustls::ServerConfig::builder()
