@@ -3,6 +3,7 @@ use std::io::{self, BufReader, ErrorKind};
 use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::error::Error as StdError;
 
 use argh::FromArgs;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -45,7 +46,7 @@ fn load_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
 }
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     let options: Options = argh::from_env();
 
     let addr = options
@@ -59,8 +60,7 @@ async fn main() -> io::Result<()> {
 
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        .with_single_cert(certs, key)?;
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
     let listener = TcpListener::bind(&addr).await?;
