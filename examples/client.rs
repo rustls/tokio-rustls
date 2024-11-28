@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
 
     let mut root_cert_store = rustls::RootCertStore::empty();
     if let Some(cafile) = &options.cafile {
-        for cert in CertificateDer::pem_file_iter(&cafile)? {
+        for cert in CertificateDer::pem_file_iter(cafile)? {
             root_cert_store.add(cert?)?;
         }
     } else {
