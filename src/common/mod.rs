@@ -181,7 +181,7 @@ where
     }
 }
 
-impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncRead for Stream<'a, IO, C>
+impl<IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncRead for Stream<'_, IO, C>
 where
     C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
     SD: SideData,
@@ -241,7 +241,7 @@ where
     }
 }
 
-impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncWrite for Stream<'a, IO, C>
+impl<IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncWrite for Stream<'_, IO, C>
 where
     C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
     SD: SideData,
@@ -350,7 +350,7 @@ pub struct SyncReadAdapter<'a, 'b, T> {
     pub cx: &'a mut Context<'b>,
 }
 
-impl<'a, 'b, T: AsyncRead + Unpin> Read for SyncReadAdapter<'a, 'b, T> {
+impl<T: AsyncRead + Unpin> Read for SyncReadAdapter<'_, '_, T> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut buf = ReadBuf::new(buf);
@@ -371,7 +371,7 @@ pub struct SyncWriteAdapter<'a, 'b, T> {
     pub cx: &'a mut Context<'b>,
 }
 
-impl<'a, 'b, T: Unpin> SyncWriteAdapter<'a, 'b, T> {
+impl<T: Unpin> SyncWriteAdapter<'_, '_, T> {
     #[inline]
     fn poll_with<U>(
         &mut self,
@@ -384,7 +384,7 @@ impl<'a, 'b, T: Unpin> SyncWriteAdapter<'a, 'b, T> {
     }
 }
 
-impl<'a, 'b, T: AsyncWrite + Unpin> Write for SyncWriteAdapter<'a, 'b, T> {
+impl<T: AsyncWrite + Unpin> Write for SyncWriteAdapter<'_, '_, T> {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.poll_with(|io, cx| io.poll_write(cx, buf))

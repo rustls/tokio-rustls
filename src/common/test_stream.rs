@@ -13,7 +13,7 @@ use super::Stream;
 
 struct Good<'a>(&'a mut Connection);
 
-impl<'a> AsyncRead for Good<'a> {
+impl AsyncRead for Good<'_> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -31,7 +31,7 @@ impl<'a> AsyncRead for Good<'a> {
     }
 }
 
-impl<'a> AsyncWrite for Good<'a> {
+impl AsyncWrite for Good<'_> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
