@@ -122,6 +122,36 @@ impl AsyncWrite for Expected {
     }
 }
 
+struct Eof;
+
+impl AsyncRead for Eof {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for Eof {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(Ok(0))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
 #[tokio::test]
 async fn stream_good() -> io::Result<()> {
     stream_good_impl(false).await
@@ -254,6 +284,23 @@ async fn stream_handshake_eof() -> io::Result<()> {
     Ok(()) as io::Result<()>
 }
 
+#[tokio::test]
+async fn stream_handshake_write_eof() -> io::Result<()> {
+    let (_, mut client) = make_pair();
+
+    let mut io = Eof;
+    let mut stream = Stream::new(&mut io, &mut client);
+
+    let mut cx = Context::from_waker(noop_waker_ref());
+    let r = stream.handshake(&mut cx);
+    assert_eq!(
+        r.map_err(|err| err.kind()),
+        Poll::Ready(Err(io::ErrorKind::WriteZero))
+    );
+
+    Ok(()) as io::Result<()>
+}
+
 // see https://github.com/tokio-rs/tls/issues/77
 #[tokio::test]
 async fn stream_handshake_regression_issues_77() -> io::Result<()> {
@@ -286,6 +333,25 @@ async fn stream_eof() -> io::Result<()> {
     assert_eq!(
         result.err().map(|e| e.kind()),
         Some(io::ErrorKind::UnexpectedEof)
+    );
+
+    Ok(()) as io::Result<()>
+}
+
+#[tokio::test]
+async fn stream_write_zero() -> io::Result<()> {
+    let (server, mut client) = make_pair();
+    let mut server = Connection::from(server);
+    poll_fn(|cx| do_handshake(&mut client, &mut server, cx)).await?;
+
+    let mut io = Eof;
+    let mut stream = Stream::new(&mut io, &mut client);
+
+    stream.write(b"1").await.unwrap();
+    let result = stream.flush().await;
+    assert_eq!(
+        result.err().map(|e| e.kind()),
+        Some(io::ErrorKind::WriteZero)
     );
 
     Ok(()) as io::Result<()>
