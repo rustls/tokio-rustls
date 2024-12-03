@@ -387,12 +387,18 @@ impl<T: Unpin> SyncWriteAdapter<'_, '_, T> {
 impl<T: AsyncWrite + Unpin> Write for SyncWriteAdapter<'_, '_, T> {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.poll_with(|io, cx| io.poll_write(cx, buf))
+        match self.poll_with(|io, cx| io.poll_write(cx, buf)) {
+            Ok(0) => Err(io::ErrorKind::WriteZero.into()),
+            other => other,
+        }
     }
 
     #[inline]
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-        self.poll_with(|io, cx| io.poll_write_vectored(cx, bufs))
+        match self.poll_with(|io, cx| io.poll_write_vectored(cx, bufs)) {
+            Ok(0) => Err(io::ErrorKind::WriteZero.into()),
+            other => other,
+        }
     }
 
     fn flush(&mut self) -> io::Result<()> {
