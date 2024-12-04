@@ -130,6 +130,7 @@ where
 
             while self.session.wants_write() {
                 match self.write_io(cx) {
+                    Poll::Ready(Ok(0)) => return Poll::Ready(Err(io::ErrorKind::WriteZero.into())),
                     Poll::Ready(Ok(n)) => {
                         wrlen += n;
                         need_flush = true;
@@ -322,14 +323,18 @@ where
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         self.session.writer().flush()?;
         while self.session.wants_write() {
-            ready!(self.write_io(cx))?;
+            if ready!(self.write_io(cx))? == 0 {
+                return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+            }
         }
         Pin::new(&mut self.io).poll_flush(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         while self.session.wants_write() {
-            ready!(self.write_io(cx))?;
+            if ready!(self.write_io(cx))? == 0 {
+                return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+            }
         }
 
         Poll::Ready(match ready!(Pin::new(&mut self.io).poll_shutdown(cx)) {
