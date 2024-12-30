@@ -17,9 +17,9 @@ use super::{Stream, TlsState};
 /// Full result of sync closure
 type SessionResult<S> = Result<S, (Option<S>, io::Error)>;
 /// Executor result wrapping sync closure result
-type SyncExecutorResult<S> = Result<SessionResult<S>, vacation::Error>;
+type ExecutorResult<S> = Result<SessionResult<S>, vacation::Error>;
 /// Future wrapping waiting on executor
-type SessionFuture<S> = Box<dyn Future<Output = SyncExecutorResult<S>> + Unpin + Send>;
+type SessionFuture<S> = Box<dyn Future<Output = ExecutorResult<S>> + Unpin + Send>;
 
 pin_project! {
 /// Session is off doing compute-heavy sync work, such as initializing the session or processing handshake packets.
@@ -55,7 +55,7 @@ where
 
         // TODO: if we ever start also delegating non-handshake byte processing, make this chance of blocking
         // variable and set by caller
-        let future = vacation::execute_sync(closure, vacation::ChanceOfBlocking::High);
+        let future = vacation::execute(closure, vacation::ChanceOfBlocking::High);
 
         Self {
             future: Box::new(Box::pin(future)),
