@@ -8,9 +8,9 @@ use rustls::server::AcceptedAlert;
 use rustls::{ConnectionCommon, SideData};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::common::{Stream, SyncWriteAdapter, TlsState};
+use crate::common::{PacketProcessingMode, Stream, SyncWriteAdapter, TlsState};
 
-#[cfg(feature = "compute-heavy-future-executor")]
+#[cfg(feature = "vacation")]
 use super::async_session::AsyncSession;
 
 pub(crate) trait IoSession {
@@ -34,7 +34,7 @@ pub(crate) trait IoSession {
 
 pub(crate) enum MidHandshake<IS: IoSession> {
     Handshaking(IS),
-    #[cfg(feature = "compute-heavy-future-executor")]
+    #[cfg(feature = "vacation")]
     AsyncSession(AsyncSession<IS>),
     End,
     SendAlert {
@@ -61,7 +61,7 @@ where
 
         let mut stream = match mem::replace(this, MidHandshake::End) {
             MidHandshake::Handshaking(stream) => stream,
-            #[cfg(feature = "compute-heavy-future-executor")]
+            #[cfg(feature = "vacation")]
             MidHandshake::AsyncSession(mut async_session) => {
                 let pinned = Pin::new(&mut async_session);
                 let session_result = ready!(pinned.poll(cx));
@@ -94,7 +94,7 @@ where
                 ( $e:expr ) => {
                     match $e {
                         Poll::Ready(Ok(_)) => (),
-                        #[cfg(feature = "compute-heavy-future-executor")]
+                        #[cfg(feature = "vacation")]
                         Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::WouldBlock => {
                             // TODO: downcast to decide on closure, for now we only do this for
                             // process_packets
@@ -132,12 +132,11 @@ where
                 };
             }
 
-
             while tls_stream.session.is_handshaking() {
-                #[cfg(feature = "compute-heavy-future-executor")]
-                try_poll!(tls_stream.handshake(cx, true));
-                #[cfg(not(feature = "compute-heavy-future-executor"))]
-                try_poll!(tls_stream.handshake(cx, false));
+                #[cfg(feature = "vacation")]
+                try_poll!(tls_stream.handshake(cx, PacketProcessingMode::Async));
+                #[cfg(not(feature = "vacation"))]
+                try_poll!(tls_stream.handshake(cx, PacketProcessingMode::Sync));
             }
 
             try_poll!(Pin::new(&mut tls_stream).poll_flush(cx));

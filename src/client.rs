@@ -288,6 +288,8 @@ fn poll_handle_early_data<IO>(
 where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
+    use crate::common::PacketProcessingMode;
+
     if let TlsState::EarlyData(pos, data) = state {
         use std::io::Write;
 
@@ -321,7 +323,8 @@ where
 
         // complete handshake
         while stream.session.is_handshaking() {
-            ready!(stream.handshake(cx, false))?;
+            // TODO: also model as using `vacation` executor
+            ready!(stream.handshake(cx, PacketProcessingMode::Sync))?;
         }
 
         // write early data (fallback)

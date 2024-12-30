@@ -1,5 +1,5 @@
-#![cfg(feature = "compute-heavy-future-executor")]
-//! Using the `compute-heavy-future-executor` feature shifts the global behavior
+#![cfg(feature = "vacation")]
+//! Using the `vacation` feature shifts the global behavior
 //! of processing bytes + establishing handshakes. So all other test suites running are validating
 //! parity of processing.
 //!
@@ -14,13 +14,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread;
 
-use compute_heavy_future_executor::{global_sync_strategy_builder, CustomExecutorSyncClosure};
 use futures_util::{future::Future, ready};
 use rustls::pki_types::ServerName;
 use rustls::{self, ClientConfig, ServerConnection, Stream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::{client::TlsStream, TlsConnector};
+use vacation::{global_sync_strategy_builder, CustomExecutorSyncClosure};
 
 struct Read1<T>(T);
 

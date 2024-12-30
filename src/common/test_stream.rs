@@ -9,7 +9,7 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConnection, Connection, ServerConnection};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
-use super::Stream;
+use super::{PacketProcessingMode, Stream};
 
 struct Good<'a>(&'a mut Connection);
 
@@ -229,12 +229,13 @@ async fn stream_handshake() -> io::Result<()> {
     {
         let mut good = Good(&mut server);
         let mut stream = Stream::new(&mut good, &mut client);
-        let (r, w) = poll_fn(|cx| stream.handshake(cx, false)).await?;
+        let (r, w) = poll_fn(|cx| stream.handshake(cx, PacketProcessingMode::Sync)).await?;
 
         assert!(r > 0);
         assert!(w > 0);
 
-        poll_fn(|cx: &mut Context<'_>| stream.handshake(cx, false)).await?; // finish server handshake
+        poll_fn(|cx: &mut Context<'_>| stream.handshake(cx, PacketProcessingMode::Sync)).await?;
+        // finish server handshake
     }
 
     assert!(!server.is_handshaking());
@@ -253,12 +254,12 @@ async fn stream_buffered_handshake() -> io::Result<()> {
     {
         let mut good = BufWriter::new(Good(&mut server));
         let mut stream = Stream::new(&mut good, &mut client);
-        let (r, w) = poll_fn(|cx| stream.handshake(cx, false)).await?;
+        let (r, w) = poll_fn(|cx| stream.handshake(cx, PacketProcessingMode::Sync)).await?;
 
         assert!(r > 0);
         assert!(w > 0);
 
-        poll_fn(|cx| stream.handshake(cx, false)).await?; // finish server handshake
+        poll_fn(|cx| stream.handshake(cx, PacketProcessingMode::Sync)).await?; // finish server handshake
     }
 
     assert!(!server.is_handshaking());
@@ -275,7 +276,7 @@ async fn stream_handshake_eof() -> io::Result<()> {
     let mut stream = Stream::new(&mut bad, &mut client);
 
     let mut cx = Context::from_waker(noop_waker_ref());
-    let r = stream.handshake(&mut cx, false);
+    let r = stream.handshake(&mut cx, PacketProcessingMode::Sync);
     assert_eq!(
         r.map_err(|err| err.kind()),
         Poll::Ready(Err(io::ErrorKind::UnexpectedEof))
@@ -292,7 +293,7 @@ async fn stream_handshake_write_eof() -> io::Result<()> {
     let mut stream = Stream::new(&mut io, &mut client);
 
     let mut cx = Context::from_waker(noop_waker_ref());
-    let r = stream.handshake(&mut cx, false);
+    let r = stream.handshake(&mut cx, PacketProcessingMode::Sync);
     assert_eq!(
         r.map_err(|err| err.kind()),
         Poll::Ready(Err(io::ErrorKind::WriteZero))
@@ -310,7 +311,7 @@ async fn stream_handshake_regression_issues_77() -> io::Result<()> {
     let mut stream = Stream::new(&mut bad, &mut client);
 
     let mut cx = Context::from_waker(noop_waker_ref());
-    let r = stream.handshake(&mut cx, false);
+    let r = stream.handshake(&mut cx, PacketProcessingMode::Sync);
     assert_eq!(
         r.map_err(|err| err.kind()),
         Poll::Ready(Err(io::ErrorKind::InvalidData))
@@ -366,8 +367,9 @@ async fn async_process_packets() -> io::Result<()> {
     let mut stream = Stream::new(&mut good, &mut client);
 
     // if feature is enabled, we expect a blocking response on process packets throughout the handshake,
-    #[cfg(feature = "compute-heavy-future-executor")]
-    {    let result = poll_fn(|cx| stream.handshake(cx, true)).await;
+    #[cfg(feature = "vacation")]
+    {
+        let result = poll_fn(|cx| stream.handshake(cx, PacketProcessingMode::Async)).await;
 
         assert_eq!(
             result.err().map(|e| e.kind()),
@@ -375,22 +377,23 @@ async fn async_process_packets() -> io::Result<()> {
         );
 
         // finish the handshake without delegating to async session
-        poll_fn(|cx| stream.handshake(cx, false)).await?; // client handshake
-        poll_fn(|cx: &mut Context<'_>| stream.handshake(cx, true)).await?; // server handshake
+        poll_fn(|cx| stream.handshake(cx, PacketProcessingMode::Sync)).await?; // client handshake
+        poll_fn(|cx: &mut Context<'_>| stream.handshake(cx, PacketProcessingMode::Sync)).await?;
+        // server handshake
     }
 
-    // if feature is disabled, we expect normal handling
-    #[cfg(not(feature = "compute-heavy-future-executor"))]
+    // if feature is disabled, we expect normal handling even if async is passed in
+    #[cfg(not(feature = "vacation"))]
     {
         {
-            let (r, w) = poll_fn(|cx| stream.handshake(cx, true)).await?; // client handshake
-    
+            let (r, w) = poll_fn(|cx| stream.handshake(cx, PacketProcessingMode::Async)).await?; // client handshake
+
             assert!(r > 0);
             assert!(w > 0);
-    
-            poll_fn(|cx| stream.handshake(cx, true)).await?; // server handshake
+
+            poll_fn(|cx| stream.handshake(cx, PacketProcessingMode::Async)).await?;
+            // server handshake
         }
-    
     }
 
     // once handshake is done, there is no longer blocking sending data over the stream
@@ -426,7 +429,7 @@ fn do_handshake(
     let mut stream = Stream::new(&mut good, client);
 
     while stream.session.is_handshaking() {
-        ready!(stream.handshake(cx, false))?;
+        ready!(stream.handshake(cx, PacketProcessingMode::Sync))?;
     }
 
     while stream.session.wants_write() {

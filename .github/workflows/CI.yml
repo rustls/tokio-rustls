@@ -62,8 +62,9 @@ jobs:
         run: |
           cargo test --locked --all
           cargo test --locked -p tokio-rustls --features early-data --test early-data
-          # we run all test suites against this feature since it shifts the default behavior globally
-          cargo test --locked -p tokio-rustls --features compute-heavy-future-executor
+          # we run all test suites against this feature 
+          # to capture any regressions that come from changes to the handshake future state machine
+          cargo test --locked -p tokio-rustls --features vacation
 
   lints:
     name: Lints

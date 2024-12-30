@@ -381,7 +381,7 @@ where
     pub fn get_ref(&self) -> Option<&IO> {
         match &self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
-            #[cfg(feature = "compute-heavy-future-executor")]
+            #[cfg(feature = "vacation")]
             MidHandshake::AsyncSession(sess) => Some(sess.get_ref()),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
@@ -392,7 +392,7 @@ where
     pub fn get_mut(&mut self) -> Option<&mut IO> {
         match &mut self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
-            #[cfg(feature = "compute-heavy-future-executor")]
+            #[cfg(feature = "vacation")]
             MidHandshake::AsyncSession(sess) => Some(sess.get_mut()),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
@@ -413,7 +413,7 @@ where
     pub fn get_ref(&self) -> Option<&IO> {
         match &self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
-            #[cfg(feature = "compute-heavy-future-executor")]
+            #[cfg(feature = "vacation")]
             MidHandshake::AsyncSession(sess) => Some(sess.get_ref()),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
@@ -424,7 +424,7 @@ where
     pub fn get_mut(&mut self) -> Option<&mut IO> {
         match &mut self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
-            #[cfg(feature = "compute-heavy-future-executor")]
+            #[cfg(feature = "vacation")]
             MidHandshake::AsyncSession(sess) => Some(sess.get_mut()),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
