@@ -61,10 +61,15 @@ where
         self.get_ref().0.as_raw_socket()
     }
 }
+#[cfg(feature = "early-data")]
+type TlsStreamExtras = Option<Waker>;
+#[cfg(not(feature = "early-data"))]
+type TlsStreamExtras = ();
 
 impl<IO> IoSession for TlsStream<IO> {
     type Io = IO;
     type Session = ClientConnection;
+    type Extras = TlsStreamExtras;
 
     #[inline]
     fn skip_handshake(&self) -> bool {
@@ -79,6 +84,35 @@ impl<IO> IoSession for TlsStream<IO> {
     #[inline]
     fn into_io(self) -> Self::Io {
         self.io
+    }
+
+    #[inline]
+    fn into_inner(self) -> (TlsState, Self::Io, Self::Session, Self::Extras) {
+        #[cfg(feature = "early-data")]
+        return (self.state, self.io, self.session, self.early_waker);
+
+        #[cfg(not(feature = "early-data"))]
+        (self.state, self.io, self.session, ())
+    }
+
+    #[inline]
+    #[allow(unused_variables)]
+    fn from_inner(
+        state: TlsState,
+        io: Self::Io,
+        session: Self::Session,
+        extras: Self::Extras,
+    ) -> Self {
+        #[cfg(feature = "early-data")]
+        return Self {
+            io,
+            session,
+            state,
+            early_waker: extras,
+        };
+
+        #[cfg(not(feature = "early-data"))]
+        Self { io, session, state }
     }
 }
 
@@ -287,7 +321,7 @@ where
 
         // complete handshake
         while stream.session.is_handshaking() {
-            ready!(stream.handshake(cx))?;
+            ready!(stream.handshake(cx, false))?;
         }
 
         // write early data (fallback)

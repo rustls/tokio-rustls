@@ -229,12 +229,12 @@ async fn stream_handshake() -> io::Result<()> {
     {
         let mut good = Good(&mut server);
         let mut stream = Stream::new(&mut good, &mut client);
-        let (r, w) = poll_fn(|cx| stream.handshake(cx)).await?;
+        let (r, w) = poll_fn(|cx| stream.handshake(cx, false)).await?;
 
         assert!(r > 0);
         assert!(w > 0);
 
-        poll_fn(|cx| stream.handshake(cx)).await?; // finish server handshake
+        poll_fn(|cx: &mut Context<'_>| stream.handshake(cx, false)).await?; // finish server handshake
     }
 
     assert!(!server.is_handshaking());
@@ -253,12 +253,12 @@ async fn stream_buffered_handshake() -> io::Result<()> {
     {
         let mut good = BufWriter::new(Good(&mut server));
         let mut stream = Stream::new(&mut good, &mut client);
-        let (r, w) = poll_fn(|cx| stream.handshake(cx)).await?;
+        let (r, w) = poll_fn(|cx| stream.handshake(cx, false)).await?;
 
         assert!(r > 0);
         assert!(w > 0);
 
-        poll_fn(|cx| stream.handshake(cx)).await?; // finish server handshake
+        poll_fn(|cx| stream.handshake(cx, false)).await?; // finish server handshake
     }
 
     assert!(!server.is_handshaking());
@@ -275,7 +275,7 @@ async fn stream_handshake_eof() -> io::Result<()> {
     let mut stream = Stream::new(&mut bad, &mut client);
 
     let mut cx = Context::from_waker(noop_waker_ref());
-    let r = stream.handshake(&mut cx);
+    let r = stream.handshake(&mut cx, false);
     assert_eq!(
         r.map_err(|err| err.kind()),
         Poll::Ready(Err(io::ErrorKind::UnexpectedEof))
@@ -292,7 +292,7 @@ async fn stream_handshake_write_eof() -> io::Result<()> {
     let mut stream = Stream::new(&mut io, &mut client);
 
     let mut cx = Context::from_waker(noop_waker_ref());
-    let r = stream.handshake(&mut cx);
+    let r = stream.handshake(&mut cx, false);
     assert_eq!(
         r.map_err(|err| err.kind()),
         Poll::Ready(Err(io::ErrorKind::WriteZero))
@@ -310,7 +310,7 @@ async fn stream_handshake_regression_issues_77() -> io::Result<()> {
     let mut stream = Stream::new(&mut bad, &mut client);
 
     let mut cx = Context::from_waker(noop_waker_ref());
-    let r = stream.handshake(&mut cx);
+    let r = stream.handshake(&mut cx, false);
     assert_eq!(
         r.map_err(|err| err.kind()),
         Poll::Ready(Err(io::ErrorKind::InvalidData))
@@ -357,6 +357,56 @@ async fn stream_write_zero() -> io::Result<()> {
     Ok(()) as io::Result<()>
 }
 
+#[tokio::test]
+async fn async_process_packets() -> io::Result<()> {
+    let (server, mut client) = make_pair();
+    let mut server = Connection::from(server);
+
+    let mut good = Good(&mut server);
+    let mut stream = Stream::new(&mut good, &mut client);
+
+    // if feature is enabled, we expect a blocking response on process packets throughout the handshake,
+    #[cfg(feature = "compute-heavy-future-executor")]
+    {    let result = poll_fn(|cx| stream.handshake(cx, true)).await;
+
+        assert_eq!(
+            result.err().map(|e| e.kind()),
+            Some(io::ErrorKind::WouldBlock)
+        );
+
+        // finish the handshake without delegating to async session
+        poll_fn(|cx| stream.handshake(cx, false)).await?; // client handshake
+        poll_fn(|cx: &mut Context<'_>| stream.handshake(cx, true)).await?; // server handshake
+    }
+
+    // if feature is disabled, we expect normal handling
+    #[cfg(not(feature = "compute-heavy-future-executor"))]
+    {
+        {
+            let (r, w) = poll_fn(|cx| stream.handshake(cx, true)).await?; // client handshake
+    
+            assert!(r > 0);
+            assert!(w > 0);
+    
+            poll_fn(|cx| stream.handshake(cx, true)).await?; // server handshake
+        }
+    
+    }
+
+    // once handshake is done, there is no longer blocking sending data over the stream
+    // now send data over the stream
+    dbg!(utils::write(&mut stream, b"Hello World!", false).await)?;
+    stream.session.send_close_notify();
+    dbg!(stream.shutdown().await)?;
+
+    let mut buf = String::new();
+    dbg!(server.process_new_packets()).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    dbg!(server.reader().read_to_string(&mut buf))?;
+    assert_eq!(buf, "Hello World!");
+
+    Ok(()) as io::Result<()>
+}
+
 fn make_pair() -> (ServerConnection, ClientConnection) {
     let (sconfig, cconfig) = utils::make_configs();
     let server = ServerConnection::new(Arc::new(sconfig)).unwrap();
@@ -376,7 +426,7 @@ fn do_handshake(
     let mut stream = Stream::new(&mut good, client);
 
     while stream.session.is_handshaking() {
-        ready!(stream.handshake(cx))?;
+        ready!(stream.handshake(cx, false))?;
     }
 
     while stream.session.wants_write() {

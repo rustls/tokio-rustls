@@ -13,6 +13,10 @@ rust-version = "1.70"
 exclude = ["/.github", "/examples", "/scripts"]
 
 [dependencies]
+# implicitly enables the tokio feature for compute-heavy-future-executor
+# (defaulting to strategy of spawn_blocking w/ concurrency conctorl)
+compute-heavy-future-executor = { version = "0.1", optional = true}
+pin-project-lite = { version = "0.2.15", optional = true }
 rustls = { version = "0.23.15", default-features = false, features = ["std"] }
 tokio = "1.0"
 
@@ -20,6 +24,7 @@ tokio = "1.0"
 default = ["logging", "tls12", "aws_lc_rs"]
 aws_lc_rs = ["rustls/aws_lc_rs"]
 aws-lc-rs = ["aws_lc_rs"] # Alias because Cargo features commonly use `-`
+compute-heavy-future-executor = ["dep:compute-heavy-future-executor", "pin-project-lite"]
 early-data = []
 fips = ["rustls/fips"]
 logging = ["rustls/logging"]
@@ -33,3 +38,6 @@ lazy_static = "1.1"
 rcgen = { version = "0.13", features = ["pem"] }
 tokio = { version = "1.0", features = ["full"] }
 webpki-roots = "0.26"
+
+[patch.crates-io]
+compute-heavy-future-executor = { path = "../compute-heavy-future-executor" }

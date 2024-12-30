@@ -369,7 +369,10 @@ pub struct FallibleConnect<IO>(MidHandshake<client::TlsStream<IO>>);
 /// Like [Accept], but returns `IO` on failure.
 pub struct FallibleAccept<IO>(MidHandshake<server::TlsStream<IO>>);
 
-impl<IO> Connect<IO> {
+impl<IO> Connect<IO>
+where
+    IO: Unpin + AsyncRead + AsyncWrite,
+{
     #[inline]
     pub fn into_fallible(self) -> FallibleConnect<IO> {
         FallibleConnect(self.0)
@@ -378,6 +381,8 @@ impl<IO> Connect<IO> {
     pub fn get_ref(&self) -> Option<&IO> {
         match &self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
+            #[cfg(feature = "compute-heavy-future-executor")]
+            MidHandshake::AsyncSession(sess) => Some(sess.get_ref()),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
             MidHandshake::End => None,
@@ -387,6 +392,8 @@ impl<IO> Connect<IO> {
     pub fn get_mut(&mut self) -> Option<&mut IO> {
         match &mut self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
+            #[cfg(feature = "compute-heavy-future-executor")]
+            MidHandshake::AsyncSession(sess) => Some(sess.get_mut()),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
             MidHandshake::End => None,
@@ -394,7 +401,10 @@ impl<IO> Connect<IO> {
     }
 }
 
-impl<IO> Accept<IO> {
+impl<IO> Accept<IO>
+where
+    IO: Unpin + AsyncRead + AsyncWrite,
+{
     #[inline]
     pub fn into_fallible(self) -> FallibleAccept<IO> {
         FallibleAccept(self.0)
@@ -403,6 +413,8 @@ impl<IO> Accept<IO> {
     pub fn get_ref(&self) -> Option<&IO> {
         match &self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
+            #[cfg(feature = "compute-heavy-future-executor")]
+            MidHandshake::AsyncSession(sess) => Some(sess.get_ref()),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
             MidHandshake::End => None,
@@ -412,6 +424,8 @@ impl<IO> Accept<IO> {
     pub fn get_mut(&mut self) -> Option<&mut IO> {
         match &mut self.0 {
             MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
+            #[cfg(feature = "compute-heavy-future-executor")]
+            MidHandshake::AsyncSession(sess) => Some(sess.get_mut()),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
             MidHandshake::End => None,
