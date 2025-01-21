@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, BufRead as _};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -9,7 +9,7 @@ use std::task::Waker;
 use std::task::{Context, Poll};
 
 use rustls::ClientConnection;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::common::{IoSession, Stream, TlsState};
 
@@ -82,6 +82,29 @@ impl<IO> IoSession for TlsStream<IO> {
     }
 }
 
+#[cfg(feature = "early-data")]
+impl<IO> TlsStream<IO>
+where
+    IO: AsyncRead + AsyncWrite + Unpin,
+{
+    fn poll_early_data(&mut self, cx: &mut Context<'_>) {
+        // In the EarlyData state, we have not really established a Tls connection.
+        // Before writing data through `AsyncWrite` and completing the tls handshake,
+        // we ignore read readiness and return to pending.
+        //
+        // In order to avoid event loss,
+        // we need to register a waker and wake it up after tls is connected.
+        if self
+            .early_waker
+            .as_ref()
+            .filter(|waker| cx.waker().will_wake(waker))
+            .is_none()
+        {
+            self.early_waker = Some(cx.waker().clone());
+        }
+    }
+}
+
 impl<IO> AsyncRead for TlsStream<IO>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
@@ -94,23 +117,7 @@ where
         match self.state {
             #[cfg(feature = "early-data")]
             TlsState::EarlyData(..) => {
-                let this = self.get_mut();
-
-                // In the EarlyData state, we have not really established a Tls connection.
-                // Before writing data through `AsyncWrite` and completing the tls handshake,
-                // we ignore read readiness and return to pending.
-                //
-                // In order to avoid event loss,
-                // we need to register a waker and wake it up after tls is connected.
-                if this
-                    .early_waker
-                    .as_ref()
-                    .filter(|waker| cx.waker().will_wake(waker))
-                    .is_none()
-                {
-                    this.early_waker = Some(cx.waker().clone());
-                }
-
+                self.get_mut().poll_early_data(cx);
                 Poll::Pending
             }
             TlsState::Stream | TlsState::WriteShutdown => {
@@ -136,6 +143,46 @@ where
             }
             TlsState::ReadShutdown | TlsState::FullyShutdown => Poll::Ready(Ok(())),
         }
+    }
+}
+
+impl<IO> AsyncBufRead for TlsStream<IO>
+where
+    IO: AsyncRead + AsyncWrite + Unpin,
+{
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        match self.state {
+            #[cfg(feature = "early-data")]
+            TlsState::EarlyData(..) => {
+                self.get_mut().poll_early_data(cx);
+                Poll::Pending
+            }
+            TlsState::Stream | TlsState::WriteShutdown => {
+                let this = self.get_mut();
+                let stream =
+                    Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+
+                match stream.poll_fill_buf(cx) {
+                    Poll::Ready(Ok(buf)) => {
+                        if buf.is_empty() {
+                            this.state.shutdown_read();
+                        }
+
+                        Poll::Ready(Ok(buf))
+                    }
+                    Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::ConnectionAborted => {
+                        this.state.shutdown_read();
+                        Poll::Ready(Err(err))
+                    }
+                    output => output,
+                }
+            }
+            TlsState::ReadShutdown | TlsState::FullyShutdown => Poll::Ready(Ok(&[])),
+        }
+    }
+
+    fn consume(mut self: Pin<&mut Self>, amt: usize) {
+        self.session.reader().consume(amt);
     }
 }
 

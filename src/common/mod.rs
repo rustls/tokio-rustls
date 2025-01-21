@@ -1,10 +1,10 @@
-use std::io::{self, IoSlice, Read, Write};
+use std::io::{self, BufRead as _, IoSlice, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use rustls::{ConnectionCommon, SideData};
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 mod handshake;
 pub(crate) use handshake::{IoSession, MidHandshake};
@@ -180,6 +180,49 @@ where
             };
         }
     }
+
+    pub(crate) fn poll_fill_buf(mut self, cx: &mut Context<'_>) -> Poll<io::Result<&'a [u8]>>
+    where
+        SD: 'a,
+    {
+        let mut io_pending = false;
+
+        // read a packet
+        while !self.eof && self.session.wants_read() {
+            match self.read_io(cx) {
+                Poll::Ready(Ok(0)) => {
+                    break;
+                }
+                Poll::Ready(Ok(_)) => (),
+                Poll::Pending => {
+                    io_pending = true;
+                    break;
+                }
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+            }
+        }
+
+        match self.session.reader().into_first_chunk() {
+            Ok(buf) => {
+                // Note that this could be empty (i.e. EOF) if a `CloseNotify` has been
+                // received and there is no more buffered data.
+                Poll::Ready(Ok(buf))
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                if !io_pending {
+                    // If `wants_read()` is satisfied, rustls will not return `WouldBlock`.
+                    // but if it does, we can try again.
+                    //
+                    // If the rustls state is abnormal, it may cause a cyclic wakeup.
+                    // but tokio's cooperative budget will prevent infinite wakeup.
+                    cx.waker().wake_by_ref();
+                }
+
+                Poll::Pending
+            }
+            Err(e) => Poll::Ready(Err(e)),
+        }
+    }
 }
 
 impl<IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncRead for Stream<'_, IO, C>
@@ -239,6 +282,27 @@ where
 
             Err(err) => Poll::Ready(Err(err)),
         }
+    }
+}
+
+impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncBufRead for Stream<'a, IO, C>
+where
+    C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
+    SD: SideData + 'a,
+{
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        let this = self.get_mut();
+        Stream {
+            // reborrow
+            io: this.io,
+            session: this.session,
+            ..*this
+        }
+        .poll_fill_buf(cx)
+    }
+
+    fn consume(mut self: Pin<&mut Self>, amt: usize) {
+        self.session.reader().consume(amt);
     }
 }
 
