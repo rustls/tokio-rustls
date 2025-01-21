@@ -180,6 +180,38 @@ where
             };
         }
     }
+
+    pub(crate) fn poll_fill_buf(mut self, cx: &mut Context<'_>) -> Poll<io::Result<&'a [u8]>>
+    where
+        SD: 'a,
+    {
+        loop {
+            // if there is buffered data, read it.
+            match self.session.reader().into_first_chunk() {
+                Ok(_) => {
+                    // Note that this could be empty (i.e. EOF) if a `CloseNotify` has been
+                    // received and there is no more buffered data.
+                    //
+                    // Re-fetch the chunk to work around borrow checker limitations :/
+                    return Poll::Ready(Ok(self.session.reader().into_first_chunk().unwrap()));
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => (),
+                Err(e) => return Poll::Ready(Err(e)),
+            }
+
+            if self.eof || !self.session.wants_read() {
+                // If `wants_read()` is satisfied, rustls will not return `WouldBlock`.
+                // but if it does, we can try again.
+                //
+                // If the rustls state is abnormal, it may cause a cyclic wakeup.
+                // but tokio's cooperative budget will prevent infinite wakeup.
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+
+            ready!(self.read_io(cx))?;
+        }
+    }
 }
 
 impl<IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncRead for Stream<'_, IO, C>
