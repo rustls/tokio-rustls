@@ -95,6 +95,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.70"
+          toolchain: "1.71"
 
       - run: cargo check --locked --lib --all-features
