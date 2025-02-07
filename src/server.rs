@@ -40,6 +40,7 @@ impl<IO> TlsStream<IO> {
 impl<IO> IoSession for TlsStream<IO> {
     type Io = IO;
     type Session = ServerConnection;
+    type Extras = ();
 
     #[inline]
     fn skip_handshake(&self) -> bool {
@@ -54,6 +55,20 @@ impl<IO> IoSession for TlsStream<IO> {
     #[inline]
     fn into_io(self) -> Self::Io {
         self.io
+    }
+
+    #[inline]
+    fn into_inner(self) -> (TlsState, Self::Io, Self::Session, Self::Extras) {
+        (self.state, self.io, self.session, ())
+    }
+
+    fn from_inner(
+        state: TlsState,
+        io: Self::Io,
+        session: Self::Session,
+        _extras: Self::Extras,
+    ) -> Self {
+        Self { io, session, state }
     }
 }
 

@@ -6,6 +6,8 @@ use std::task::{Context, Poll};
 use rustls::{ConnectionCommon, SideData};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+#[cfg(feature = "vacation")]
+mod async_session;
 mod handshake;
 pub(crate) use handshake::{IoSession, MidHandshake};
 
@@ -17,6 +19,14 @@ pub enum TlsState {
     ReadShutdown,
     WriteShutdown,
     FullyShutdown,
+}
+
+/// Whether to delegate the call to the `vacation` executor,
+/// only kicks in if `vacation` feature is enabled
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum PacketProcessingMode {
+    Async,
+    Sync,
 }
 
 impl TlsState {
@@ -89,14 +99,28 @@ where
         Pin::new(self)
     }
 
-    pub fn read_io(&mut self, cx: &mut Context) -> Poll<io::Result<usize>> {
+    #[allow(unused_variables)]
+    pub fn read_io(
+        &mut self,
+        cx: &mut Context,
+        packet_processing_mode: PacketProcessingMode,
+    ) -> Poll<io::Result<usize>> {
         let mut reader = SyncReadAdapter { io: self.io, cx };
 
-        let n = match self.session.read_tls(&mut reader) {
+        let n: usize = match self.session.read_tls(&mut reader) {
             Ok(n) => n,
             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
             Err(err) => return Poll::Ready(Err(err)),
         };
+
+        #[cfg(feature = "vacation")]
+        if packet_processing_mode == PacketProcessingMode::Async {
+            // TODO: stop modeling errors as IO, use enum on types of async session processing
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "bubbling up process_packets for async handling",
+            )));
+        }
 
         self.session.process_new_packets().map_err(|err| {
             // In case we have an alert to send describing this error,
@@ -119,7 +143,11 @@ where
         }
     }
 
-    pub fn handshake(&mut self, cx: &mut Context) -> Poll<io::Result<(usize, usize)>> {
+    pub fn handshake(
+        &mut self,
+        cx: &mut Context,
+        packet_processing_mode: PacketProcessingMode,
+    ) -> Poll<io::Result<(usize, usize)>> {
         let mut wrlen = 0;
         let mut rdlen = 0;
 
@@ -152,7 +180,7 @@ where
             }
 
             while !self.eof && self.session.wants_read() {
-                match self.read_io(cx) {
+                match self.read_io(cx, packet_processing_mode) {
                     Poll::Ready(Ok(0)) => self.eof = true,
                     Poll::Ready(Ok(n)) => rdlen += n,
                     Poll::Pending => {
@@ -196,7 +224,7 @@ where
 
         // read a packet
         while !self.eof && self.session.wants_read() {
-            match self.read_io(cx) {
+            match self.read_io(cx, PacketProcessingMode::Sync) {
                 Poll::Ready(Ok(0)) => {
                     break;
                 }
