@@ -1,4 +1,4 @@
-use std::io::{self, IoSlice, Read, Write};
+use std::io::{self, BufRead, IoSlice, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -220,57 +220,22 @@ where
     SD: SideData,
 {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let mut io_pending = false;
-
-        // read a packet
-        while !self.eof && self.session.wants_read() {
-            match self.read_io(cx) {
-                Poll::Ready(Ok(0)) => {
-                    break;
-                }
-                Poll::Ready(Ok(_)) => (),
-                Poll::Pending => {
-                    io_pending = true;
-                    break;
-                }
-                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-            }
+        let this = self.get_mut();
+        let data = ready!(Stream {
+            // reborrow
+            io: this.io,
+            session: this.session,
+            ..*this
         }
-
-        match self.session.reader().read(buf.initialize_unfilled()) {
-            // If Rustls returns `Ok(0)` (while `buf` is non-empty), the peer closed the
-            // connection with a `CloseNotify` message and no more data will be forthcoming.
-            //
-            // Rustls yielded more data: advance the buffer, then see if more data is coming.
-            //
-            // We don't need to modify `self.eof` here, because it is only a temporary mark.
-            // rustls will only return 0 if is has received `CloseNotify`,
-            // in which case no additional processing is required.
-            Ok(n) => {
-                buf.advance(n);
-                Poll::Ready(Ok(()))
-            }
-
-            // Rustls doesn't have more data to yield, but it believes the connection is open.
-            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                if !io_pending {
-                    // If `wants_read()` is satisfied, rustls will not return `WouldBlock`.
-                    // but if it does, we can try again.
-                    //
-                    // If the rustls state is abnormal, it may cause a cyclic wakeup.
-                    // but tokio's cooperative budget will prevent infinite wakeup.
-                    cx.waker().wake_by_ref();
-                }
-
-                Poll::Pending
-            }
-
-            Err(err) => Poll::Ready(Err(err)),
-        }
+        .poll_fill_buf(cx))?;
+        let amount = buf.remaining().min(data.len());
+        buf.put_slice(&data[..amount]);
+        this.session.reader().consume(amount);
+        Poll::Ready(Ok(()))
     }
 }
 
