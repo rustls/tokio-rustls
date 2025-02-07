@@ -22,6 +22,7 @@ impl AsyncRead for Good<'_> {
         let mut buf2 = buf.initialize_unfilled();
 
         Poll::Ready(match self.0.write_tls(buf2.by_ref()) {
+            Ok(0) => return Poll::Pending,
             Ok(n) => {
                 buf.advance(n);
                 Ok(())
