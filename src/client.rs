@@ -110,39 +110,15 @@ where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        match self.state {
-            #[cfg(feature = "early-data")]
-            TlsState::EarlyData(..) => {
-                self.get_mut().poll_early_data(cx);
-                Poll::Pending
-            }
-            TlsState::Stream | TlsState::WriteShutdown => {
-                let this = self.get_mut();
-                let mut stream =
-                    Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
-                let prev = buf.remaining();
-
-                match stream.as_mut_pin().poll_read(cx, buf) {
-                    Poll::Ready(Ok(())) => {
-                        if prev == buf.remaining() || stream.eof {
-                            this.state.shutdown_read();
-                        }
-
-                        Poll::Ready(Ok(()))
-                    }
-                    Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::ConnectionAborted => {
-                        this.state.shutdown_read();
-                        Poll::Ready(Err(err))
-                    }
-                    output => output,
-                }
-            }
-            TlsState::ReadShutdown | TlsState::FullyShutdown => Poll::Ready(Ok(())),
-        }
+        let data = ready!(self.as_mut().poll_fill_buf(cx))?;
+        let len = data.len().min(buf.remaining());
+        buf.put_slice(&data[..len]);
+        self.consume(len);
+        Poll::Ready(Ok(()))
     }
 }
 
