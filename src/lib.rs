@@ -51,7 +51,7 @@ pub use rustls;
 use rustls::pki_types::ServerName;
 use rustls::server::AcceptedAlert;
 use rustls::{ClientConfig, ClientConnection, CommonState, ServerConfig, ServerConnection};
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 macro_rules! ready {
     ( $e:expr ) => {
@@ -541,6 +541,27 @@ where
         match self.get_mut() {
             TlsStream::Client(x) => Pin::new(x).poll_read(cx, buf),
             TlsStream::Server(x) => Pin::new(x).poll_read(cx, buf),
+        }
+    }
+}
+
+impl<T> AsyncBufRead for TlsStream<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    #[inline]
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        match self.get_mut() {
+            TlsStream::Client(x) => Pin::new(x).poll_fill_buf(cx),
+            TlsStream::Server(x) => Pin::new(x).poll_fill_buf(cx),
+        }
+    }
+
+    #[inline]
+    fn consume(self: Pin<&mut Self>, amt: usize) {
+        match self.get_mut() {
+            TlsStream::Client(x) => Pin::new(x).consume(amt),
+            TlsStream::Server(x) => Pin::new(x).consume(amt),
         }
     }
 }

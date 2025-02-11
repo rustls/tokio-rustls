@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, BufRead as _};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use rustls::ServerConnection;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::common::{IoSession, Stream, TlsState};
 
@@ -62,37 +62,52 @@ where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let data = ready!(self.as_mut().poll_fill_buf(cx))?;
+        let len = data.len().min(buf.remaining());
+        buf.put_slice(&data[..len]);
+        self.consume(len);
+        Poll::Ready(Ok(()))
+    }
+}
 
-        match &this.state {
+impl<IO> AsyncBufRead for TlsStream<IO>
+where
+    IO: AsyncRead + AsyncWrite + Unpin,
+{
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        match self.state {
             TlsState::Stream | TlsState::WriteShutdown => {
-                let prev = buf.remaining();
+                let this = self.get_mut();
+                let stream =
+                    Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
 
-                match stream.as_mut_pin().poll_read(cx, buf) {
-                    Poll::Ready(Ok(())) => {
-                        if prev == buf.remaining() || stream.eof {
+                match stream.poll_fill_buf(cx) {
+                    Poll::Ready(Ok(buf)) => {
+                        if buf.is_empty() {
                             this.state.shutdown_read();
                         }
 
-                        Poll::Ready(Ok(()))
+                        Poll::Ready(Ok(buf))
                     }
-                    Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                    Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::ConnectionAborted => {
                         this.state.shutdown_read();
                         Poll::Ready(Err(err))
                     }
                     output => output,
                 }
             }
-            TlsState::ReadShutdown | TlsState::FullyShutdown => Poll::Ready(Ok(())),
+            TlsState::ReadShutdown | TlsState::FullyShutdown => Poll::Ready(Ok(&[])),
             #[cfg(feature = "early-data")]
-            s => unreachable!("server TLS can not hit this state: {:?}", s),
+            ref s => unreachable!("server TLS can not hit this state: {:?}", s),
         }
+    }
+
+    fn consume(mut self: Pin<&mut Self>, amt: usize) {
+        self.session.reader().consume(amt);
     }
 }
 
