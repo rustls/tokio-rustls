@@ -153,6 +153,11 @@ impl TlsConnector {
             session,
         }))
     }
+
+    /// Get a read-only reference to underlying config
+    pub fn config(&self) -> Arc<ClientConfig> {
+        self.inner.clone()
+    }
 }
 
 impl TlsAcceptor {
@@ -187,6 +192,11 @@ impl TlsAcceptor {
             io: stream,
             state: TlsState::Stream,
         }))
+    }
+
+    /// Get a read-only reference to underlying config
+    pub fn config(&self) -> Arc<ServerConfig> {
+        self.inner.clone()
     }
 }
 
