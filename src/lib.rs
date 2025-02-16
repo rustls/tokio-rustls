@@ -155,8 +155,8 @@ impl TlsConnector {
     }
 
     /// Get a read-only reference to underlying config
-    pub fn config(&self) -> Arc<ClientConfig> {
-        self.inner.clone()
+    pub fn config(&self) -> &Arc<ClientConfig> {
+        &self.inner
     }
 }
 
@@ -195,8 +195,8 @@ impl TlsAcceptor {
     }
 
     /// Get a read-only reference to underlying config
-    pub fn config(&self) -> Arc<ServerConfig> {
-        self.inner.clone()
+    pub fn config(&self) -> &Arc<ServerConfig> {
+        &self.inner
     }
 }
 
