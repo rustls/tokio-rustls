@@ -359,7 +359,7 @@ where
             }
         }
 
-        Poll::Ready(match ready!(Pin::new(&mut self.io).poll_shutdown(cx)) {
+        Poll::Ready(match ready!(Pin::new(&mut self.io).poll_flush(cx)) {
             Ok(()) => Ok(()),
             // When trying to shutdown, not being connected seems fine
             Err(err) if err.kind() == io::ErrorKind::NotConnected => Ok(()),

@@ -366,6 +366,75 @@ async fn stream_write_zero() -> io::Result<()> {
     Ok(()) as io::Result<()>
 }
 
+#[tokio::test]
+async fn stream_shutdown() -> io::Result<()> {
+    struct TestIo<'a> {
+        conn: &'a mut Connection,
+        is_shutdown: bool,
+    }
+
+    impl AsyncRead for TestIo<'_> {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for TestIo<'_> {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            mut buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let len = self.conn.read_tls(buf.by_ref())?;
+            self.conn
+                .process_new_packets()
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+            Poll::Ready(Ok(len))
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.conn
+                .process_new_packets()
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.get_mut().is_shutdown = true;
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    let (server, mut client) = make_pair();
+    let mut server = Connection::from(server);
+    poll_fn(|cx| do_handshake(&mut client, &mut server, cx)).await?;
+
+    {
+        let mut io = TestIo {
+            conn: &mut server,
+            is_shutdown: false,
+        };
+        let mut stream = Stream::new(&mut io, &mut client);
+
+        stream.session.send_close_notify();
+        stream.shutdown().await?;
+
+        assert!(!io.is_shutdown);
+    }
+
+    assert!(!server.is_handshaking());
+    assert!(server
+        .process_new_packets()
+        .map_err(io::Error::other)?
+        .peer_has_closed());
+
+    Ok(()) as io::Result<()>
+}
+
 fn make_pair() -> (ServerConnection, ClientConnection) {
     let (sconfig, cconfig) = utils::make_configs();
     let server = ServerConnection::new(Arc::new(sconfig)).unwrap();
