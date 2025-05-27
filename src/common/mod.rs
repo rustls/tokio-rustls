@@ -63,6 +63,7 @@ pub(crate) struct Stream<'a, IO, C> {
     pub(crate) io: &'a mut IO,
     pub(crate) session: &'a mut C,
     pub(crate) eof: bool,
+    pub(crate) need_flush: bool,
 }
 
 impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> Stream<'a, IO, C>
@@ -77,11 +78,18 @@ where
             // The state so far is only used to detect EOF, so either Stream
             // or EarlyData state should both be all right.
             eof: false,
+            // Whether a previous flush returned pending, or a write occured without a flush.
+            need_flush: false,
         }
     }
 
     pub(crate) fn set_eof(mut self, eof: bool) -> Self {
         self.eof = eof;
+        self
+    }
+
+    pub(crate) fn set_need_flush(mut self, need_flush: bool) -> Self {
+        self.need_flush = need_flush;
         self
     }
 
@@ -126,14 +134,13 @@ where
         loop {
             let mut write_would_block = false;
             let mut read_would_block = false;
-            let mut need_flush = false;
 
             while self.session.wants_write() {
                 match self.write_io(cx) {
                     Poll::Ready(Ok(0)) => return Poll::Ready(Err(io::ErrorKind::WriteZero.into())),
                     Poll::Ready(Ok(n)) => {
                         wrlen += n;
-                        need_flush = true;
+                        self.need_flush = true;
                     }
                     Poll::Pending => {
                         write_would_block = true;
@@ -143,9 +150,9 @@ where
                 }
             }
 
-            if need_flush {
+            if self.need_flush {
                 match Pin::new(&mut self.io).poll_flush(cx) {
-                    Poll::Ready(Ok(())) => (),
+                    Poll::Ready(Ok(())) => self.need_flush = false,
                     Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
                     Poll::Pending => write_would_block = true,
                 }

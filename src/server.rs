@@ -18,6 +18,7 @@ pub struct TlsStream<IO> {
     pub(crate) io: IO,
     pub(crate) session: ServerConnection,
     pub(crate) state: TlsState,
+    pub(crate) need_flush: bool,
 }
 
 impl<IO> TlsStream<IO> {
@@ -47,8 +48,13 @@ impl<IO> IoSession for TlsStream<IO> {
     }
 
     #[inline]
-    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session) {
-        (&mut self.state, &mut self.io, &mut self.session)
+    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session, &mut bool) {
+        (
+            &mut self.state,
+            &mut self.io,
+            &mut self.session,
+            &mut self.need_flush,
+        )
     }
 
     #[inline]
