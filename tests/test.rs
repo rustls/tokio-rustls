@@ -9,7 +9,7 @@ use futures_util::future::TryFutureExt;
 use lazy_static::lazy_static;
 use rustls::pki_types::ServerName;
 use rustls::ClientConfig;
-use tokio::io::{copy, split, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{copy, split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::{runtime, time};
@@ -62,10 +62,11 @@ lazy_static! {
     };
 }
 
-async fn start_client(
+async fn start_client<S: AsyncRead + AsyncWrite + Unpin>(
     addr: SocketAddr,
     domain: &str,
     config: Arc<ClientConfig>,
+    wrapper: impl FnOnce(TcpStream) -> S,
     use_buf_read: bool,
 ) -> io::Result<()> {
     const FILE: &[u8] = include_bytes!("../README.md");
@@ -74,7 +75,7 @@ async fn start_client(
     let config = TlsConnector::from(config);
     let mut buf = vec![0; FILE.len()];
 
-    let stream = TcpStream::connect(&addr).await?;
+    let stream = wrapper(TcpStream::connect(&addr).await?);
     let mut stream = config.connect(domain, stream).await?;
     stream.write_all(FILE).await?;
     stream.flush().await?;
@@ -93,7 +94,10 @@ async fn start_client(
     Ok(())
 }
 
-async fn pass_impl(use_buf_read: bool) -> io::Result<()> {
+async fn pass_impl<S: AsyncRead + AsyncWrite + Unpin>(
+    wrapper: impl FnOnce(TcpStream) -> S,
+    use_buf_read: bool,
+) -> io::Result<()> {
     // TODO: not sure how to resolve this right now but since
     // TcpStream::bind now returns a future it creates a race
     // condition until its ready sometimes.
@@ -107,6 +111,7 @@ async fn pass_impl(use_buf_read: bool) -> io::Result<()> {
         *TEST_SERVER,
         utils::TEST_SERVER_DOMAIN,
         config,
+        wrapper,
         use_buf_read,
     )
     .await?;
@@ -116,12 +121,12 @@ async fn pass_impl(use_buf_read: bool) -> io::Result<()> {
 
 #[tokio::test]
 async fn pass() -> io::Result<()> {
-    pass_impl(false).await
+    pass_impl(|stream| stream, false).await
 }
 
 #[tokio::test]
 async fn pass_buf_read() -> io::Result<()> {
-    pass_impl(true).await
+    pass_impl(|stream| stream, true).await
 }
 
 #[tokio::test]
@@ -130,7 +135,7 @@ async fn fail() -> io::Result<()> {
     let config = Arc::new(config);
 
     assert_ne!(utils::TEST_SERVER_DOMAIN, "google.com");
-    let ret = start_client(*TEST_SERVER, "google.com", config, false).await;
+    let ret = start_client(*TEST_SERVER, "google.com", config, |stream| stream, false).await;
     assert!(ret.is_err());
 
     Ok(())
@@ -311,6 +316,11 @@ async fn lazy_config_acceptor_alert() {
 
     let fatal_alert_decode_error = b"\x15\x03\x03\x00\x02\x02\x32";
     assert_eq!(received, fatal_alert_decode_error)
+}
+
+#[tokio::test]
+async fn handshake_flush_pending() -> io::Result<()> {
+    pass_impl(utils::FlushWrapper::new, false).await
 }
 
 // Include `utils` module
