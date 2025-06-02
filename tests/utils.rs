@@ -8,7 +8,7 @@ mod utils {
     use tokio::io::{self, AsyncWrite, AsyncWriteExt};
 
     #[allow(dead_code)]
-    pub fn make_configs() -> (ServerConfig, ClientConfig) {
+    pub(crate) fn make_configs() -> (ServerConfig, ClientConfig) {
         // A test root certificate that is the trust anchor for the CHAIN.
         const ROOT: &str = include_str!("certs/root.pem");
         // A server certificate chain that includes both an end-entity server certificate
@@ -40,7 +40,7 @@ mod utils {
     }
 
     #[allow(dead_code)]
-    pub async fn write<W: AsyncWrite + Unpin>(
+    pub(crate) async fn write<W: AsyncWrite + Unpin>(
         w: &mut W,
         data: &[u8],
         vectored: bool,
@@ -65,5 +65,5 @@ mod utils {
     }
 
     #[allow(dead_code)]
-    pub const TEST_SERVER_DOMAIN: &str = "foobar.com";
+    pub(crate) const TEST_SERVER_DOMAIN: &str = "foobar.com";
 }
