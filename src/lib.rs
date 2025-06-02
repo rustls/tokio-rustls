@@ -36,6 +36,8 @@
 //!
 //! see <https://github.com/tokio-rs/tls/issues/41>
 
+#![warn(unreachable_pub)]
+
 use std::future::Future;
 use std::io;
 #[cfg(unix)]

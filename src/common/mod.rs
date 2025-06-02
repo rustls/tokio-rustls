@@ -10,7 +10,7 @@ mod handshake;
 pub(crate) use handshake::{IoSession, MidHandshake};
 
 #[derive(Debug)]
-pub enum TlsState {
+pub(crate) enum TlsState {
     #[cfg(feature = "early-data")]
     EarlyData(usize, Vec<u8>),
     Stream,
@@ -21,7 +21,7 @@ pub enum TlsState {
 
 impl TlsState {
     #[inline]
-    pub fn shutdown_read(&mut self) {
+    pub(crate) fn shutdown_read(&mut self) {
         match *self {
             TlsState::WriteShutdown | TlsState::FullyShutdown => *self = TlsState::FullyShutdown,
             _ => *self = TlsState::ReadShutdown,
@@ -29,7 +29,7 @@ impl TlsState {
     }
 
     #[inline]
-    pub fn shutdown_write(&mut self) {
+    pub(crate) fn shutdown_write(&mut self) {
         match *self {
             TlsState::ReadShutdown | TlsState::FullyShutdown => *self = TlsState::FullyShutdown,
             _ => *self = TlsState::WriteShutdown,
@@ -37,32 +37,32 @@ impl TlsState {
     }
 
     #[inline]
-    pub fn writeable(&self) -> bool {
+    pub(crate) fn writeable(&self) -> bool {
         !matches!(*self, TlsState::WriteShutdown | TlsState::FullyShutdown)
     }
 
     #[inline]
-    pub fn readable(&self) -> bool {
+    pub(crate) fn readable(&self) -> bool {
         !matches!(*self, TlsState::ReadShutdown | TlsState::FullyShutdown)
     }
 
     #[inline]
     #[cfg(feature = "early-data")]
-    pub fn is_early_data(&self) -> bool {
+    pub(crate) fn is_early_data(&self) -> bool {
         matches!(self, TlsState::EarlyData(..))
     }
 
     #[inline]
     #[cfg(not(feature = "early-data"))]
-    pub const fn is_early_data(&self) -> bool {
+    pub(crate) const fn is_early_data(&self) -> bool {
         false
     }
 }
 
-pub struct Stream<'a, IO, C> {
-    pub io: &'a mut IO,
-    pub session: &'a mut C,
-    pub eof: bool,
+pub(crate) struct Stream<'a, IO, C> {
+    pub(crate) io: &'a mut IO,
+    pub(crate) session: &'a mut C,
+    pub(crate) eof: bool,
 }
 
 impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> Stream<'a, IO, C>
@@ -70,7 +70,7 @@ where
     C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
     SD: SideData,
 {
-    pub fn new(io: &'a mut IO, session: &'a mut C) -> Self {
+    pub(crate) fn new(io: &'a mut IO, session: &'a mut C) -> Self {
         Stream {
             io,
             session,
@@ -80,16 +80,16 @@ where
         }
     }
 
-    pub fn set_eof(mut self, eof: bool) -> Self {
+    pub(crate) fn set_eof(mut self, eof: bool) -> Self {
         self.eof = eof;
         self
     }
 
-    pub fn as_mut_pin(&mut self) -> Pin<&mut Self> {
+    pub(crate) fn as_mut_pin(&mut self) -> Pin<&mut Self> {
         Pin::new(self)
     }
 
-    pub fn read_io(&mut self, cx: &mut Context) -> Poll<io::Result<usize>> {
+    pub(crate) fn read_io(&mut self, cx: &mut Context) -> Poll<io::Result<usize>> {
         let mut reader = SyncReadAdapter { io: self.io, cx };
 
         let n = match self.session.read_tls(&mut reader) {
@@ -110,7 +110,7 @@ where
         Poll::Ready(Ok(n))
     }
 
-    pub fn write_io(&mut self, cx: &mut Context) -> Poll<io::Result<usize>> {
+    pub(crate) fn write_io(&mut self, cx: &mut Context) -> Poll<io::Result<usize>> {
         let mut writer = SyncWriteAdapter { io: self.io, cx };
 
         match self.session.write_tls(&mut writer) {
@@ -119,7 +119,7 @@ where
         }
     }
 
-    pub fn handshake(&mut self, cx: &mut Context) -> Poll<io::Result<(usize, usize)>> {
+    pub(crate) fn handshake(&mut self, cx: &mut Context) -> Poll<io::Result<(usize, usize)>> {
         let mut wrlen = 0;
         let mut rdlen = 0;
 
@@ -372,9 +372,9 @@ where
 /// associated [`Context`].
 ///
 /// Turns `Poll::Pending` into `WouldBlock`.
-pub struct SyncReadAdapter<'a, 'b, T> {
-    pub io: &'a mut T,
-    pub cx: &'a mut Context<'b>,
+pub(crate) struct SyncReadAdapter<'a, 'b, T> {
+    pub(crate) io: &'a mut T,
+    pub(crate) cx: &'a mut Context<'b>,
 }
 
 impl<T: AsyncRead + Unpin> Read for SyncReadAdapter<'_, '_, T> {
@@ -393,9 +393,9 @@ impl<T: AsyncRead + Unpin> Read for SyncReadAdapter<'_, '_, T> {
 /// associated [`Context`].
 ///
 /// Turns `Poll::Pending` into `WouldBlock`.
-pub struct SyncWriteAdapter<'a, 'b, T> {
-    pub io: &'a mut T,
-    pub cx: &'a mut Context<'b>,
+pub(crate) struct SyncWriteAdapter<'a, 'b, T> {
+    pub(crate) io: &'a mut T,
+    pub(crate) cx: &'a mut Context<'b>,
 }
 
 impl<T: Unpin> SyncWriteAdapter<'_, '_, T> {
