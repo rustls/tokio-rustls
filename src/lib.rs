@@ -149,6 +149,8 @@ impl TlsConnector {
                 TlsState::Stream
             },
 
+            need_flush: false,
+
             #[cfg(feature = "early-data")]
             early_waker: None,
 
@@ -193,6 +195,7 @@ impl TlsAcceptor {
             session,
             io: stream,
             state: TlsState::Stream,
+            need_flush: false,
         }))
     }
 
@@ -363,6 +366,7 @@ where
             session: conn,
             io: self.io,
             state: TlsState::Stream,
+            need_flush: false,
         }))
     }
 }

@@ -20,6 +20,7 @@ pub struct TlsStream<IO> {
     pub(crate) io: IO,
     pub(crate) session: ClientConnection,
     pub(crate) state: TlsState,
+    pub(crate) need_flush: bool,
 
     #[cfg(feature = "early-data")]
     pub(crate) early_waker: Option<Waker>,
@@ -72,8 +73,13 @@ impl<IO> IoSession for TlsStream<IO> {
     }
 
     #[inline]
-    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session) {
-        (&mut self.state, &mut self.io, &mut self.session)
+    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session, &mut bool) {
+        (
+            &mut self.state,
+            &mut self.io,
+            &mut self.session,
+            &mut self.need_flush,
+        )
     }
 
     #[inline]
@@ -174,21 +180,27 @@ where
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(&mut this.io, &mut this.session)
+            .set_eof(!this.state.readable())
+            .set_need_flush(this.need_flush);
 
         #[cfg(feature = "early-data")]
         {
             let bufs = [io::IoSlice::new(buf)];
-            let written = ready!(poll_handle_early_data(
+            let written = poll_handle_early_data(
                 &mut this.state,
                 &mut stream,
                 &mut this.early_waker,
                 cx,
-                &bufs
-            ))?;
-            if written != 0 {
-                return Poll::Ready(Ok(written));
+                &bufs,
+            )?;
+            match written {
+                Poll::Ready(0) => {}
+                Poll::Ready(written) => return Poll::Ready(Ok(written)),
+                Poll::Pending => {
+                    this.need_flush = stream.need_flush;
+                    return Poll::Pending;
+                }
             }
         }
 
@@ -203,20 +215,26 @@ where
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(&mut this.io, &mut this.session)
+            .set_eof(!this.state.readable())
+            .set_need_flush(this.need_flush);
 
         #[cfg(feature = "early-data")]
         {
-            let written = ready!(poll_handle_early_data(
+            let written = poll_handle_early_data(
                 &mut this.state,
                 &mut stream,
                 &mut this.early_waker,
                 cx,
-                bufs
-            ))?;
-            if written != 0 {
-                return Poll::Ready(Ok(written));
+                bufs,
+            )?;
+            match written {
+                Poll::Ready(0) => {}
+                Poll::Ready(written) => return Poll::Ready(Ok(written)),
+                Poll::Pending => {
+                    this.need_flush = stream.need_flush;
+                    return Poll::Pending;
+                }
             }
         }
 
@@ -230,17 +248,24 @@ where
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(&mut this.io, &mut this.session)
+            .set_eof(!this.state.readable())
+            .set_need_flush(this.need_flush);
 
         #[cfg(feature = "early-data")]
-        ready!(poll_handle_early_data(
-            &mut this.state,
-            &mut stream,
-            &mut this.early_waker,
-            cx,
-            &[]
-        ))?;
+        {
+            let written = poll_handle_early_data(
+                &mut this.state,
+                &mut stream,
+                &mut this.early_waker,
+                cx,
+                &[],
+            )?;
+            if written.is_pending() {
+                this.need_flush = stream.need_flush;
+                return Poll::Pending;
+            }
+        }
 
         stream.as_mut_pin().poll_flush(cx)
     }

@@ -15,7 +15,7 @@ pub(crate) trait IoSession {
     type Session;
 
     fn skip_handshake(&self) -> bool;
-    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session);
+    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session, &mut bool);
     fn into_io(self) -> Self::Io;
 }
 
@@ -67,15 +67,18 @@ where
         };
 
         if !stream.skip_handshake() {
-            let (state, io, session) = stream.get_mut();
-            let mut tls_stream = Stream::new(io, session).set_eof(!state.readable());
+            let (state, io, session, need_flush) = stream.get_mut();
+            let mut tls_stream = Stream::new(io, session)
+                .set_eof(!state.readable())
+                .set_need_flush(*need_flush);
 
             macro_rules! try_poll {
                 ( $e:expr ) => {
                     match $e {
-                        Poll::Ready(Ok(_)) => (),
+                        Poll::Ready(Ok(x)) => x,
                         Poll::Ready(Err(err)) => return Poll::Ready(Err((err, stream.into_io()))),
                         Poll::Pending => {
+                            *need_flush = tls_stream.need_flush;
                             *this = MidHandshake::Handshaking(stream);
                             return Poll::Pending;
                         }
