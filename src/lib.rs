@@ -115,15 +115,31 @@ impl TlsConnector {
     where
         IO: AsyncRead + AsyncWrite + Unpin,
     {
-        self.connect_with(domain, stream, |_| ())
+        self.connect_impl(domain, stream, None, |_| ())
     }
 
+    #[inline]
     pub fn connect_with<IO, F>(&self, domain: ServerName<'static>, stream: IO, f: F) -> Connect<IO>
     where
         IO: AsyncRead + AsyncWrite + Unpin,
         F: FnOnce(&mut ClientConnection),
     {
-        let mut session = match ClientConnection::new(self.inner.clone(), domain) {
+        self.connect_impl(domain, stream, None, f)
+    }
+
+    fn connect_impl<IO, F>(
+        &self,
+        domain: ServerName<'static>,
+        stream: IO,
+        alpn_protocols: Option<Vec<Vec<u8>>>,
+        f: F,
+    ) -> Connect<IO>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin,
+        F: FnOnce(&mut ClientConnection),
+    {
+        let alpn = alpn_protocols.unwrap_or_else(|| self.inner.alpn_protocols.clone());
+        let mut session = match ClientConnection::new_with_alpn(self.inner.clone(), domain, alpn) {
             Ok(session) => session,
             Err(error) => {
                 return Connect(MidHandshake::Error {
@@ -158,9 +174,42 @@ impl TlsConnector {
         }))
     }
 
+    pub fn with_alpn(&self, alpn_protocols: Vec<Vec<u8>>) -> TlsConnectorWithAlpn<'_> {
+        TlsConnectorWithAlpn {
+            inner: self,
+            alpn_protocols,
+        }
+    }
+
     /// Get a read-only reference to underlying config
     pub fn config(&self) -> &Arc<ClientConfig> {
         &self.inner
+    }
+}
+
+pub struct TlsConnectorWithAlpn<'c> {
+    inner: &'c TlsConnector,
+    alpn_protocols: Vec<Vec<u8>>,
+}
+
+impl TlsConnectorWithAlpn<'_> {
+    #[inline]
+    pub fn connect<IO>(self, domain: ServerName<'static>, stream: IO) -> Connect<IO>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin,
+    {
+        self.inner
+            .connect_impl(domain, stream, Some(self.alpn_protocols), |_| ())
+    }
+
+    #[inline]
+    pub fn connect_with<IO, F>(self, domain: ServerName<'static>, stream: IO, f: F) -> Connect<IO>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin,
+        F: FnOnce(&mut ClientConnection),
+    {
+        self.inner
+            .connect_impl(domain, stream, Some(self.alpn_protocols), f)
     }
 }
 
