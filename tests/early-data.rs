@@ -2,38 +2,15 @@
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener};
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::thread;
 
-use futures_util::{future::Future, ready};
 use rustls::pki_types::ServerName;
 use rustls::{self, ClientConfig, ServerConnection, Stream};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
-
-struct Read1<T>(T);
-
-impl<T: AsyncRead + Unpin> Future for Read1<T> {
-    type Output = io::Result<()>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut buf = [0];
-        let mut buf = ReadBuf::new(&mut buf);
-
-        ready!(Pin::new(&mut self.0).poll_read(cx, &mut buf))?;
-
-        if buf.filled().is_empty() {
-            Poll::Ready(Ok(()))
-        } else {
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    }
-}
 
 async fn send<S: AsyncRead + AsyncWrite + Unpin>(
     config: Arc<ClientConfig>,
