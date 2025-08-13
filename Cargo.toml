@@ -13,16 +13,15 @@ rust-version = "1.71"
 exclude = ["/.github", "/examples", "/scripts"]
 
 [dependencies]
-rustls = { version = "0.23.27", default-features = false, features = ["std"] }
+rustls = { git = "https://github.com/rustls/rustls.git", rev = "30f3753a70c3b138841675b6381c0b63a3005414", default-features = false, features = ["std"] }
 tokio = "1.0"
 
 [features]
-default = ["logging", "tls12", "aws_lc_rs"]
-aws_lc_rs = ["rustls/aws_lc_rs"]
-aws-lc-rs = ["aws_lc_rs"] # Alias because Cargo features commonly use `-`
+default = ["log", "tls12"]
+aws-lc-rs = ["rustls/aws-lc-rs"]
 early-data = []
 fips = ["rustls/fips"]
-logging = ["rustls/logging"]
+log = ["rustls/log"]
 ring = ["rustls/ring"]
 tls12 = ["rustls/tls12"]
 
