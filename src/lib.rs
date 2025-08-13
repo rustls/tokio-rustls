@@ -376,6 +376,13 @@ where
     }
 }
 
+/// An incoming connection received through [`LazyConfigAcceptor`].
+///
+/// This contains the generic `IO` asynchronous transport,
+/// [`ClientHello`](rustls::server::ClientHello) data,
+/// and all the state required to continue the TLS handshake (e.g. via
+/// [`StartHandshake::into_stream`]).
+#[derive(Debug)]
 pub struct StartHandshake<IO> {
     accepted: rustls::server::Accepted,
     io: IO,
