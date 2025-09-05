@@ -50,9 +50,8 @@ use std::task::{Context, Poll};
 
 pub use rustls;
 
-use rustls::pki_types::ServerName;
 use rustls::server::AcceptedAlert;
-use rustls::{ClientConfig, ClientConnection, CommonState, ServerConfig, ServerConnection};
+use rustls::{CommonState, ServerConfig, ServerConnection};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 macro_rules! ready {
@@ -65,146 +64,15 @@ macro_rules! ready {
 }
 
 pub mod client;
+pub use client::{TlsConnector, TlsConnectorWithAlpn};
 mod common;
 use common::{MidHandshake, TlsState};
 pub mod server;
-
-/// A wrapper around a `rustls::ClientConfig`, providing an async `connect` method.
-#[derive(Clone)]
-pub struct TlsConnector {
-    inner: Arc<ClientConfig>,
-    #[cfg(feature = "early-data")]
-    early_data: bool,
-}
-
-impl TlsConnector {
-    /// Enable 0-RTT.
-    ///
-    /// If you want to use 0-RTT,
-    /// You must also set `ClientConfig.enable_early_data` to `true`.
-    #[cfg(feature = "early-data")]
-    pub fn early_data(mut self, flag: bool) -> TlsConnector {
-        self.early_data = flag;
-        self
-    }
-
-    #[inline]
-    pub fn connect<IO>(&self, domain: ServerName<'static>, stream: IO) -> Connect<IO>
-    where
-        IO: AsyncRead + AsyncWrite + Unpin,
-    {
-        self.connect_impl(domain, stream, None, |_| ())
-    }
-
-    #[inline]
-    pub fn connect_with<IO, F>(&self, domain: ServerName<'static>, stream: IO, f: F) -> Connect<IO>
-    where
-        IO: AsyncRead + AsyncWrite + Unpin,
-        F: FnOnce(&mut ClientConnection),
-    {
-        self.connect_impl(domain, stream, None, f)
-    }
-
-    fn connect_impl<IO, F>(
-        &self,
-        domain: ServerName<'static>,
-        stream: IO,
-        alpn_protocols: Option<Vec<Vec<u8>>>,
-        f: F,
-    ) -> Connect<IO>
-    where
-        IO: AsyncRead + AsyncWrite + Unpin,
-        F: FnOnce(&mut ClientConnection),
-    {
-        let alpn = alpn_protocols.unwrap_or_else(|| self.inner.alpn_protocols.clone());
-        let mut session = match ClientConnection::new_with_alpn(self.inner.clone(), domain, alpn) {
-            Ok(session) => session,
-            Err(error) => {
-                return Connect(MidHandshake::Error {
-                    io: stream,
-                    // TODO(eliza): should this really return an `io::Error`?
-                    // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
-                });
-            }
-        };
-        f(&mut session);
-
-        Connect(MidHandshake::Handshaking(client::TlsStream {
-            io: stream,
-
-            #[cfg(not(feature = "early-data"))]
-            state: TlsState::Stream,
-
-            #[cfg(feature = "early-data")]
-            state: if self.early_data && session.early_data().is_some() {
-                TlsState::EarlyData(0, Vec::new())
-            } else {
-                TlsState::Stream
-            },
-
-            need_flush: false,
-
-            #[cfg(feature = "early-data")]
-            early_waker: None,
-
-            session,
-        }))
-    }
-
-    pub fn with_alpn(&self, alpn_protocols: Vec<Vec<u8>>) -> TlsConnectorWithAlpn<'_> {
-        TlsConnectorWithAlpn {
-            inner: self,
-            alpn_protocols,
-        }
-    }
-
-    /// Get a read-only reference to underlying config
-    pub fn config(&self) -> &Arc<ClientConfig> {
-        &self.inner
-    }
-}
-
-pub struct TlsConnectorWithAlpn<'c> {
-    inner: &'c TlsConnector,
-    alpn_protocols: Vec<Vec<u8>>,
-}
-
-impl TlsConnectorWithAlpn<'_> {
-    #[inline]
-    pub fn connect<IO>(self, domain: ServerName<'static>, stream: IO) -> Connect<IO>
-    where
-        IO: AsyncRead + AsyncWrite + Unpin,
-    {
-        self.inner
-            .connect_impl(domain, stream, Some(self.alpn_protocols), |_| ())
-    }
-
-    #[inline]
-    pub fn connect_with<IO, F>(self, domain: ServerName<'static>, stream: IO, f: F) -> Connect<IO>
-    where
-        IO: AsyncRead + AsyncWrite + Unpin,
-        F: FnOnce(&mut ClientConnection),
-    {
-        self.inner
-            .connect_impl(domain, stream, Some(self.alpn_protocols), f)
-    }
-}
 
 /// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
 #[derive(Clone)]
 pub struct TlsAcceptor {
     inner: Arc<ServerConfig>,
-}
-
-impl From<Arc<ClientConfig>> for TlsConnector {
-    fn from(inner: Arc<ClientConfig>) -> TlsConnector {
-        TlsConnector {
-            inner,
-            #[cfg(feature = "early-data")]
-            early_data: false,
-        }
-    }
 }
 
 impl From<Arc<ServerConfig>> for TlsAcceptor {
