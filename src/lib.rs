@@ -64,7 +64,7 @@ macro_rules! ready {
 }
 
 pub mod client;
-pub use client::{TlsConnector, TlsConnectorWithAlpn};
+pub use client::{Connect, FallibleConnect, TlsConnector, TlsConnectorWithAlpn};
 mod common;
 use common::{MidHandshake, TlsState};
 pub mod server;
@@ -295,44 +295,12 @@ where
     }
 }
 
-/// Future returned from `TlsConnector::connect` which will resolve
-/// once the connection handshake has finished.
-pub struct Connect<IO>(MidHandshake<client::TlsStream<IO>>);
-
 /// Future returned from `TlsAcceptor::accept` which will resolve
 /// once the accept handshake has finished.
 pub struct Accept<IO>(MidHandshake<server::TlsStream<IO>>);
 
-/// Like [Connect], but returns `IO` on failure.
-pub struct FallibleConnect<IO>(MidHandshake<client::TlsStream<IO>>);
-
 /// Like [Accept], but returns `IO` on failure.
 pub struct FallibleAccept<IO>(MidHandshake<server::TlsStream<IO>>);
-
-impl<IO> Connect<IO> {
-    #[inline]
-    pub fn into_fallible(self) -> FallibleConnect<IO> {
-        FallibleConnect(self.0)
-    }
-
-    pub fn get_ref(&self) -> Option<&IO> {
-        match &self.0 {
-            MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
-            MidHandshake::SendAlert { io, .. } => Some(io),
-            MidHandshake::Error { io, .. } => Some(io),
-            MidHandshake::End => None,
-        }
-    }
-
-    pub fn get_mut(&mut self) -> Option<&mut IO> {
-        match &mut self.0 {
-            MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
-            MidHandshake::SendAlert { io, .. } => Some(io),
-            MidHandshake::Error { io, .. } => Some(io),
-            MidHandshake::End => None,
-        }
-    }
-}
 
 impl<IO> Accept<IO> {
     #[inline]
@@ -359,30 +327,12 @@ impl<IO> Accept<IO> {
     }
 }
 
-impl<IO: AsyncRead + AsyncWrite + Unpin> Future for Connect<IO> {
-    type Output = io::Result<client::TlsStream<IO>>;
-
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.0).poll(cx).map_err(|(err, _)| err)
-    }
-}
-
 impl<IO: AsyncRead + AsyncWrite + Unpin> Future for Accept<IO> {
     type Output = io::Result<server::TlsStream<IO>>;
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.0).poll(cx).map_err(|(err, _)| err)
-    }
-}
-
-impl<IO: AsyncRead + AsyncWrite + Unpin> Future for FallibleConnect<IO> {
-    type Output = Result<client::TlsStream<IO>, (io::Error, IO)>;
-
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.0).poll(cx)
     }
 }
 

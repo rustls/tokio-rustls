@@ -1,3 +1,4 @@
+use std::future::Future;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -14,10 +15,7 @@ use std::{
 use rustls::{pki_types::ServerName, ClientConfig, ClientConnection};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::{
-    common::{IoSession, MidHandshake, Stream, TlsState},
-    Connect,
-};
+use crate::common::{IoSession, MidHandshake, Stream, TlsState};
 
 /// A wrapper around a `rustls::ClientConfig`, providing an async `connect` method.
 #[derive(Clone)]
@@ -150,6 +148,56 @@ impl TlsConnectorWithAlpn<'_> {
             .connect_impl(domain, stream, Some(self.alpn_protocols), f)
     }
 }
+
+/// Future returned from `TlsConnector::connect` which will resolve
+/// once the connection handshake has finished.
+pub struct Connect<IO>(MidHandshake<TlsStream<IO>>);
+
+impl<IO> Connect<IO> {
+    #[inline]
+    pub fn into_fallible(self) -> FallibleConnect<IO> {
+        FallibleConnect(self.0)
+    }
+
+    pub fn get_ref(&self) -> Option<&IO> {
+        match &self.0 {
+            MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
+            MidHandshake::SendAlert { io, .. } => Some(io),
+            MidHandshake::Error { io, .. } => Some(io),
+            MidHandshake::End => None,
+        }
+    }
+
+    pub fn get_mut(&mut self) -> Option<&mut IO> {
+        match &mut self.0 {
+            MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
+            MidHandshake::SendAlert { io, .. } => Some(io),
+            MidHandshake::Error { io, .. } => Some(io),
+            MidHandshake::End => None,
+        }
+    }
+}
+
+impl<IO: AsyncRead + AsyncWrite + Unpin> Future for Connect<IO> {
+    type Output = io::Result<TlsStream<IO>>;
+
+    #[inline]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx).map_err(|(err, _)| err)
+    }
+}
+
+impl<IO: AsyncRead + AsyncWrite + Unpin> Future for FallibleConnect<IO> {
+    type Output = Result<TlsStream<IO>, (io::Error, IO)>;
+
+    #[inline]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx)
+    }
+}
+
+/// Like [Connect], but returns `IO` on failure.
+pub struct FallibleConnect<IO>(MidHandshake<TlsStream<IO>>);
 
 /// A wrapper around an underlying raw stream which implements the TLS or SSL
 /// protocol.
