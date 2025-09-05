@@ -77,28 +77,6 @@ pub struct TlsConnector {
     early_data: bool,
 }
 
-/// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
-#[derive(Clone)]
-pub struct TlsAcceptor {
-    inner: Arc<ServerConfig>,
-}
-
-impl From<Arc<ClientConfig>> for TlsConnector {
-    fn from(inner: Arc<ClientConfig>) -> TlsConnector {
-        TlsConnector {
-            inner,
-            #[cfg(feature = "early-data")]
-            early_data: false,
-        }
-    }
-}
-
-impl From<Arc<ServerConfig>> for TlsAcceptor {
-    fn from(inner: Arc<ServerConfig>) -> TlsAcceptor {
-        TlsAcceptor { inner }
-    }
-}
-
 impl TlsConnector {
     /// Enable 0-RTT.
     ///
@@ -210,6 +188,28 @@ impl TlsConnectorWithAlpn<'_> {
     {
         self.inner
             .connect_impl(domain, stream, Some(self.alpn_protocols), f)
+    }
+}
+
+/// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
+#[derive(Clone)]
+pub struct TlsAcceptor {
+    inner: Arc<ServerConfig>,
+}
+
+impl From<Arc<ClientConfig>> for TlsConnector {
+    fn from(inner: Arc<ClientConfig>) -> TlsConnector {
+        TlsConnector {
+            inner,
+            #[cfg(feature = "early-data")]
+            early_data: false,
+        }
+    }
+}
+
+impl From<Arc<ServerConfig>> for TlsAcceptor {
+    fn from(inner: Arc<ServerConfig>) -> TlsAcceptor {
+        TlsAcceptor { inner }
     }
 }
 
