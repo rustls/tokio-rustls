@@ -205,6 +205,19 @@ impl<IO> StartHandshake<IO>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
+    /// Create a new object from an `IO` transport and prior TLS metadata.
+    pub fn from_parts(transport: IO, accepted: rustls::server::Accepted) -> Self {
+        Self {
+            accepted,
+            io: transport,
+        }
+    }
+
+    /// Consume this object and return the underlying components.
+    pub fn into_parts(self) -> (IO, rustls::server::Accepted) {
+        (self.io, self.accepted)
+    }
+
     pub fn client_hello(&self) -> rustls::server::ClientHello<'_> {
         self.accepted.client_hello()
     }
