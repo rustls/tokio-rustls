@@ -253,6 +253,12 @@ where
     }
 }
 
+impl<IO> AsRef<IO> for StartHandshake<IO> {
+    fn as_ref(&self) -> &IO {
+        &self.io
+    }
+}
+
 /// Future returned from `TlsAcceptor::accept` which will resolve
 /// once the accept handshake has finished.
 pub struct Accept<IO>(MidHandshake<TlsStream<IO>>);
