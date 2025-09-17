@@ -207,7 +207,7 @@ where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
     /// Create a new object from an `IO` transport and prior TLS metadata.
-    pub fn from_parts(transport: IO, accepted: rustls::server::Accepted) -> Self {
+    pub fn from_parts(accepted: rustls::server::Accepted, transport: IO) -> Self {
         Self {
             accepted,
             io: transport,
