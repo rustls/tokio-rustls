@@ -1,6 +1,6 @@
 [package]
 name = "tokio-rustls"
-version = "0.26.2"
+version = "0.26.3"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rustls/tokio-rustls"
 homepage = "https://github.com/rustls/tokio-rustls"
