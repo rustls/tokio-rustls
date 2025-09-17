@@ -195,10 +195,11 @@ where
 /// [`ClientHello`](rustls::server::ClientHello) data,
 /// and all the state required to continue the TLS handshake (e.g. via
 /// [`StartHandshake::into_stream`]).
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct StartHandshake<IO> {
-    accepted: rustls::server::Accepted,
-    io: IO,
+    pub accepted: rustls::server::Accepted,
+    pub io: IO,
 }
 
 impl<IO> StartHandshake<IO>
@@ -211,11 +212,6 @@ where
             accepted,
             io: transport,
         }
-    }
-
-    /// Consume this object and return the underlying components.
-    pub fn into_parts(self) -> (IO, rustls::server::Accepted) {
-        (self.io, self.accepted)
     }
 
     pub fn client_hello(&self) -> rustls::server::ClientHello<'_> {
