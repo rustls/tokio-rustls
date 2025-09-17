@@ -23,33 +23,33 @@ impl TlsState {
     #[inline]
     pub(crate) fn shutdown_read(&mut self) {
         match *self {
-            TlsState::WriteShutdown | TlsState::FullyShutdown => *self = TlsState::FullyShutdown,
-            _ => *self = TlsState::ReadShutdown,
+            Self::WriteShutdown | Self::FullyShutdown => *self = Self::FullyShutdown,
+            _ => *self = Self::ReadShutdown,
         }
     }
 
     #[inline]
     pub(crate) fn shutdown_write(&mut self) {
         match *self {
-            TlsState::ReadShutdown | TlsState::FullyShutdown => *self = TlsState::FullyShutdown,
-            _ => *self = TlsState::WriteShutdown,
+            Self::ReadShutdown | Self::FullyShutdown => *self = Self::FullyShutdown,
+            _ => *self = Self::WriteShutdown,
         }
     }
 
     #[inline]
     pub(crate) fn writeable(&self) -> bool {
-        !matches!(*self, TlsState::WriteShutdown | TlsState::FullyShutdown)
+        !matches!(*self, Self::WriteShutdown | Self::FullyShutdown)
     }
 
     #[inline]
     pub(crate) fn readable(&self) -> bool {
-        !matches!(*self, TlsState::ReadShutdown | TlsState::FullyShutdown)
+        !matches!(*self, Self::ReadShutdown | Self::FullyShutdown)
     }
 
     #[inline]
     #[cfg(feature = "early-data")]
     pub(crate) fn is_early_data(&self) -> bool {
-        matches!(self, TlsState::EarlyData(..))
+        matches!(self, Self::EarlyData(..))
     }
 
     #[inline]

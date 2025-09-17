@@ -82,7 +82,7 @@ mod utils {
     impl<S> FlushWrapper<S> {
         #[allow(dead_code)]
         pub(crate) fn new(stream: S) -> Self {
-            FlushWrapper {
+            Self {
                 stream,
                 buf: VecDeque::new(),
                 queued: Vec::new(),
