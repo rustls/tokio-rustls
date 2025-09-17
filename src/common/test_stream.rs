@@ -356,7 +356,7 @@ async fn stream_write_zero() -> io::Result<()> {
     let mut io = Eof;
     let mut stream = Stream::new(&mut io, &mut client);
 
-    stream.write(b"1").await.unwrap();
+    stream.write_all(b"1").await.unwrap();
     let result = stream.flush().await;
     assert_eq!(
         result.err().map(|e| e.kind()),
