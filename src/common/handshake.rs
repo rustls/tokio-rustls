@@ -45,16 +45,16 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        let mut stream = match mem::replace(this, MidHandshake::End) {
-            MidHandshake::Handshaking(stream) => stream,
-            MidHandshake::SendAlert {
+        let mut stream = match mem::replace(this, Self::End) {
+            Self::Handshaking(stream) => stream,
+            Self::SendAlert {
                 mut io,
                 mut alert,
                 error,
             } => loop {
                 match alert.write(&mut SyncWriteAdapter { io: &mut io, cx }) {
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        *this = MidHandshake::SendAlert { io, error, alert };
+                        *this = Self::SendAlert { io, error, alert };
                         return Poll::Pending;
                     }
                     Err(_) | Ok(0) => return Poll::Ready(Err((error, io))),
@@ -62,7 +62,7 @@ where
                 };
             },
             // Starting the handshake returned an error; fail the future immediately.
-            MidHandshake::Error { io, error } => return Poll::Ready(Err((error, io))),
+            Self::Error { io, error } => return Poll::Ready(Err((error, io))),
             _ => panic!("unexpected polling after handshake"),
         };
 

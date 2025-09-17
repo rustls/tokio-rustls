@@ -21,8 +21,8 @@ pub struct TlsAcceptor {
 }
 
 impl From<Arc<ServerConfig>> for TlsAcceptor {
-    fn from(inner: Arc<ServerConfig>) -> TlsAcceptor {
-        TlsAcceptor { inner }
+    fn from(inner: Arc<ServerConfig>) -> Self {
+        Self { inner }
     }
 }
 

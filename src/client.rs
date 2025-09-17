@@ -31,7 +31,7 @@ impl TlsConnector {
     /// If you want to use 0-RTT,
     /// You must also set `ClientConfig.enable_early_data` to `true`.
     #[cfg(feature = "early-data")]
-    pub fn early_data(mut self, flag: bool) -> TlsConnector {
+    pub fn early_data(mut self, flag: bool) -> Self {
         self.early_data = flag;
         self
     }
@@ -114,8 +114,8 @@ impl TlsConnector {
 }
 
 impl From<Arc<ClientConfig>> for TlsConnector {
-    fn from(inner: Arc<ClientConfig>) -> TlsConnector {
-        TlsConnector {
+    fn from(inner: Arc<ClientConfig>) -> Self {
+        Self {
             inner,
             #[cfg(feature = "early-data")]
             early_data: false,
