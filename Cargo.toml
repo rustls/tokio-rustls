@@ -20,11 +20,13 @@ tokio = "1.0"
 default = ["logging", "tls12", "aws_lc_rs"]
 aws_lc_rs = ["rustls/aws_lc_rs"]
 aws-lc-rs = ["aws_lc_rs"] # Alias because Cargo features commonly use `-`
+brotli = ["rustls/brotli"]
 early-data = []
 fips = ["rustls/fips"]
 logging = ["rustls/logging"]
 ring = ["rustls/ring"]
 tls12 = ["rustls/tls12"]
+zlib = ["rustls/zlib"]
 
 [dev-dependencies]
 argh = "0.1.1"
