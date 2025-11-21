@@ -111,7 +111,7 @@ where
     /// let listener = tokio::net::TcpListener::bind("127.0.0.1:4443").await.unwrap();
     /// let (stream, _) = listener.accept().await.unwrap();
     ///
-    /// let acceptor = tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream);
+    /// let acceptor = tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream).send_alert(false);
     /// tokio::pin!(acceptor);
     ///
     /// match acceptor.as_mut().await {
@@ -144,6 +144,57 @@ where
             Some(AlertState::Sending(_, alert)) => Some(alert),
             Some(AlertState::Saved(alert)) => Some(alert),
             None => None,
+        }
+    }
+
+    /// Writes a stored alert, consuming the alert (if any) and IO.
+    pub async fn write_alert(&mut self) -> io::Result<()> {
+        let Some(alert) = self.take_alert() else {
+            return Ok(());
+        };
+        let Some(io) = self.take_io() else {
+            return Ok(());
+        };
+        WritingAlert {
+            io,
+            alert: Some(alert),
+        }
+        .await
+    }
+}
+
+struct WritingAlert<IO> {
+    io: IO,
+    alert: Option<AcceptedAlert>,
+}
+
+impl<IO> Future for WritingAlert<IO>
+where
+    IO: AsyncRead + AsyncWrite + Unpin,
+{
+    type Output = Result<(), io::Error>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let io = &mut this.io;
+        loop {
+            if let Some(mut alert) = this.alert.take() {
+                match alert.write(&mut SyncWriteAdapter { io, cx }) {
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        this.alert = Some(alert);
+                        return Poll::Pending;
+                    }
+                    Err(e) => {
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, e)));
+                    }
+                    Ok(0) => {
+                        return Poll::Ready(Ok(()));
+                    }
+                    Ok(_) => {
+                        this.alert = Some(alert);
+                        continue;
+                    }
+                };
+            }
         }
     }
 }
@@ -199,7 +250,10 @@ where
                 Ok(None) => {}
                 Err((err, alert)) => match this.send_alert {
                     true => this.alert = Some(AlertState::Sending(err, alert)),
-                    false => this.alert = Some(AlertState::Saved(alert)),
+                    false => {
+                        this.alert = Some(AlertState::Saved(alert));
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
+                    }
                 },
             }
         }
