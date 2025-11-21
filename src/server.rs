@@ -70,7 +70,8 @@ impl TlsAcceptor {
 pub struct LazyConfigAcceptor<IO> {
     acceptor: rustls::server::Acceptor,
     io: Option<IO>,
-    alert: Option<(rustls::Error, AcceptedAlert)>,
+    alert: Option<AlertState>,
+    send_alert: bool,
 }
 
 impl<IO> LazyConfigAcceptor<IO>
@@ -83,7 +84,14 @@ where
             acceptor,
             io: Some(io),
             alert: None,
+            send_alert: true,
         }
+    }
+
+    /// Configure whether to send a TLS alert on failure.
+    pub fn send_alert(mut self, send: bool) -> Self {
+        self.send_alert = send;
+        self
     }
 
     /// Takes back the client connection. Will return `None` if called more than once or if the
@@ -130,6 +138,14 @@ where
     pub fn take_io(&mut self) -> Option<IO> {
         self.io.take()
     }
+
+    pub fn take_alert(&mut self) -> Option<AcceptedAlert> {
+        match self.alert.take() {
+            Some(AlertState::Sending(_, alert)) => Some(alert),
+            Some(AlertState::Saved(alert)) => Some(alert),
+            None => None,
+        }
+    }
 }
 
 impl<IO> Future for LazyConfigAcceptor<IO>
@@ -151,17 +167,17 @@ where
                 }
             };
 
-            if let Some((err, mut alert)) = this.alert.take() {
+            if let Some(AlertState::Sending(err, mut alert)) = this.alert.take() {
                 match alert.write(&mut SyncWriteAdapter { io, cx }) {
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        this.alert = Some((err, alert));
+                        this.alert = Some(AlertState::Sending(err, alert));
                         return Poll::Pending;
                     }
                     Ok(0) | Err(_) => {
                         return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)))
                     }
                     Ok(_) => {
-                        this.alert = Some((err, alert));
+                        this.alert = Some(AlertState::Sending(err, alert));
                         continue;
                     }
                 };
@@ -181,12 +197,18 @@ where
                     return Poll::Ready(Ok(StartHandshake { accepted, io }));
                 }
                 Ok(None) => {}
-                Err((err, alert)) => {
-                    this.alert = Some((err, alert));
-                }
+                Err((err, alert)) => match this.send_alert {
+                    true => this.alert = Some(AlertState::Sending(err, alert)),
+                    false => this.alert = Some(AlertState::Saved(alert)),
+                },
             }
         }
     }
+}
+
+enum AlertState {
+    Sending(rustls::Error, AcceptedAlert),
+    Saved(AcceptedAlert),
 }
 
 /// An incoming connection received through [`LazyConfigAcceptor`].
