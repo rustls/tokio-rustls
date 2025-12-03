@@ -94,13 +94,10 @@ where
         self
     }
 
-    /// Writes a stored alert, consuming the alert (if any) and IO.
-    pub async fn write_alert(&mut self) -> io::Result<()> {
+    /// Writes a stored alert, consuming the alert (if any).
+    /// This is useful when previously `send_alert(false)` was set.
+    pub async fn write_alert(&mut self, io: IO) -> io::Result<()> {
         let Some(alert) = self.take_alert() else {
-            return Ok(());
-        };
-
-        let Some(io) = self.take_io() else {
             return Ok(());
         };
 
@@ -251,7 +248,10 @@ where
 
             match alert.write(&mut SyncWriteAdapter { io, cx }) {
                 Ok(0) => return Poll::Ready(Ok(())),
-                Ok(_) => continue,
+                Ok(_) => {
+                    this.alert = Some(alert);
+                    continue;
+                }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                     this.alert = Some(alert);
                     return Poll::Pending;
