@@ -319,6 +319,78 @@ async fn lazy_config_acceptor_alert() {
 }
 
 #[tokio::test]
+async fn lazy_config_acceptor_return_http() {
+    let (mut cstream, sstream) = tokio::io::duplex(1024);
+
+    let (tx, rx) = oneshot::channel();
+
+    tokio::spawn(async move {
+        // This is write instead of write_all because of the short duplex size, which is necessarily
+        // symmetrical. We never finish writing because the LazyConfigAcceptor returns an error
+        let _ = cstream.write(b"not tls").await;
+        let mut buf = Vec::new();
+        cstream.read_to_end(&mut buf).await.unwrap();
+        tx.send(buf).unwrap();
+    });
+
+    let acceptor =
+        LazyConfigAcceptor::new(rustls::server::Acceptor::default(), sstream).send_alert(false);
+    tokio::pin!(acceptor);
+
+    let Ok(accept_result) = time::timeout(Duration::from_secs(3), acceptor.as_mut()).await else {
+        panic!("timeout");
+    };
+
+    assert!(accept_result.is_err());
+    let mut io = acceptor.take_io().unwrap();
+    io.write_all(b"HTTP/1.1 400 Invalid Input\r\n\r\n\r\nNot TLS\n")
+        .await
+        .unwrap();
+    io.shutdown().await.unwrap();
+
+    let Ok(Ok(received)) = time::timeout(Duration::from_secs(3), rx).await else {
+        panic!("failed to receive");
+    };
+
+    let recv = b"HTTP/1.1 400 Invalid Input\r\n\r\n\r\nNot TLS\n";
+    assert_eq!(received, recv)
+}
+
+#[tokio::test]
+async fn lazy_config_acceptor_manual_alert() {
+    let (mut cstream, sstream) = tokio::io::duplex(2);
+
+    let (tx, rx) = oneshot::channel();
+
+    tokio::spawn(async move {
+        // This is write instead of write_all because of the short duplex size, which is necessarily
+        // symmetrical. We never finish writing because the LazyConfigAcceptor returns an error
+        let _ = cstream.write(b"not tls").await;
+        let mut buf = Vec::new();
+        cstream.read_to_end(&mut buf).await.unwrap();
+        tx.send(buf).unwrap();
+    });
+
+    let acceptor =
+        LazyConfigAcceptor::new(rustls::server::Acceptor::default(), sstream).send_alert(false);
+    tokio::pin!(acceptor);
+
+    let Ok(accept_result) = time::timeout(Duration::from_secs(3), acceptor.as_mut()).await else {
+        panic!("timeout");
+    };
+    assert!(accept_result.is_err());
+    let io = acceptor.take_io().unwrap();
+    // At this point, a user may do something with the IO....
+    acceptor.write_alert(io).await.unwrap();
+    let Ok(Ok(received)) = time::timeout(Duration::from_secs(3), rx).await else {
+        panic!("failed to receive");
+    };
+
+    let fatal_alert_decode_error = b"\x15\x03\x03\x00\x02\x02\x32";
+    assert_eq!(received, fatal_alert_decode_error)
+}
+
+#[tokio::test]
 async fn handshake_flush_pending() -> io::Result<()> {
     pass_impl(utils::FlushWrapper::new, false).await
 }
