@@ -378,9 +378,10 @@ async fn lazy_config_acceptor_manual_alert() {
     let Ok(accept_result) = time::timeout(Duration::from_secs(3), acceptor.as_mut()).await else {
         panic!("timeout");
     };
-
     assert!(accept_result.is_err());
-    acceptor.write_alert().await.unwrap();
+    let io = acceptor.take_io().unwrap();
+    // At this point, a user may do something with the IO....
+    acceptor.write_alert(io).await.unwrap();
     let Ok(Ok(received)) = time::timeout(Duration::from_secs(3), rx).await else {
         panic!("failed to receive");
     };
