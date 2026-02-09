@@ -29,7 +29,7 @@ tls12 = ["rustls/tls12"]
 zlib = ["rustls/zlib"]
 
 [dev-dependencies]
-argh = "0.1.1"
+argh = "0.1.14"
 futures-util = "0.3.1"
 lazy_static = "1.1"
 rcgen = { version = "0.14", features = ["pem"] }
