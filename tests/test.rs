@@ -1,3 +1,5 @@
+#![cfg(any(feature = "aws_lc_rs", feature = "ring"))]
+
 use std::io::{Cursor, ErrorKind};
 use std::net::SocketAddr;
 use std::sync::mpsc::channel;

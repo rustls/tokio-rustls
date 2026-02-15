@@ -1,3 +1,5 @@
+#![cfg(all(any(feature = "aws_lc_rs", feature = "ring"), feature = "tls12"))]
+
 use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
