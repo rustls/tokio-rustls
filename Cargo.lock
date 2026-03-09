@@ -43,20 +43,19 @@ dependencies = [
 
 [[package]]
 name = "argh"
-version = "0.1.13"
+version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34ff18325c8a36b82f992e533ece1ec9f9a9db446bd1c14d4f936bac88fcd240"
+checksum = "42a66b74feaa2a7eddc2a74d273f151b545742ef375581c5a566607df992565e"
 dependencies = [
  "argh_derive",
  "argh_shared",
- "rust-fuzzy-search",
 ]
 
 [[package]]
 name = "argh_derive"
-version = "0.1.13"
+version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adb7b2b83a50d329d5d8ccc620f5c7064028828538bdf5646acd60dc1f767803"
+checksum = "0ce8f59ed4ec07742760cf3593727c8caff28ef4537eeb33be25e5fb454850d1"
 dependencies = [
  "argh_shared",
  "proc-macro2",
@@ -66,9 +65,9 @@ dependencies = [
 
 [[package]]
 name = "argh_shared"
-version = "0.1.13"
+version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a464143cc82dedcdc3928737445362466b7674b5db4e2eb8e869846d6d84f4f6"
+checksum = "284b476f7c2b6af9aa49f059466ebfa725b0f53c33d271a691e613e9187bf507"
 dependencies = [
  "serde",
 ]
@@ -794,12 +793,6 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
-
-[[package]]
-name = "rust-fuzzy-search"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a157657054ffe556d8858504af8a672a054a6e0bd9e8ee531059100c0fa11bb2"
 
 [[package]]
 name = "rustc-demangle"
