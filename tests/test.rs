@@ -144,6 +144,20 @@ async fn fail() -> io::Result<()> {
 }
 
 #[tokio::test]
+async fn handshake_timeout() {
+    let (_, config) = utils::make_configs();
+    let config = TlsConnector::from(Arc::new(config))
+        .with_handshake_timeout(Some(Duration::from_millis(10)));
+    let domain = ServerName::try_from(utils::TEST_SERVER_DOMAIN)
+        .unwrap()
+        .to_owned();
+    let (client, _server) = tokio::io::duplex(4096);
+
+    let err = config.connect(domain, client).await.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TimedOut);
+}
+
+#[tokio::test]
 async fn test_lazy_config_acceptor() -> io::Result<()> {
     let (sconfig, cconfig) = utils::make_configs();
 
