@@ -7,7 +7,9 @@ use rustls::{ConnectionCommon, SideData};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 mod handshake;
+mod timeout;
 pub(crate) use handshake::{IoSession, MidHandshake};
+pub(crate) use timeout::HandshakeFuture;
 
 #[derive(Debug)]
 pub(crate) enum TlsState {
