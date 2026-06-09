@@ -8,12 +8,12 @@ use std::task::{Context, Poll};
 use futures_util::future::poll_fn;
 use futures_util::task::noop_waker_ref;
 use rustls::pki_types::ServerName;
-use rustls::{ClientConnection, Connection, ServerConnection};
+use rustls::{ClientConnection, Connection as _, ServerConnection};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 use super::Stream;
 
-struct Good<'a>(&'a mut Connection);
+struct Good<'a>(&'a mut ServerConnection);
 
 impl AsyncRead for Good<'_> {
     fn poll_read(
@@ -172,8 +172,7 @@ async fn stream_good_bufread() -> io::Result<()> {
 async fn stream_good_impl(vectored: bool, bufread: bool) -> io::Result<()> {
     const FILE: &[u8] = include_bytes!("../../README.md");
 
-    let (server, mut client) = make_pair();
-    let mut server = Connection::from(server);
+    let (mut server, mut client) = make_pair();
     poll_fn(|cx| do_handshake(&mut client, &mut server, cx)).await?;
 
     io::copy(&mut Cursor::new(FILE), &mut server.writer())?;
@@ -207,8 +206,7 @@ async fn stream_good_impl(vectored: bool, bufread: bool) -> io::Result<()> {
 
 #[tokio::test]
 async fn stream_bad() -> io::Result<()> {
-    let (server, mut client) = make_pair();
-    let mut server = Connection::from(server);
+    let (mut server, mut client) = make_pair();
     poll_fn(|cx| do_handshake(&mut client, &mut server, cx)).await?;
     client.set_buffer_limit(Some(1024));
 
@@ -234,8 +232,7 @@ async fn stream_bad() -> io::Result<()> {
 
 #[tokio::test]
 async fn stream_handshake() -> io::Result<()> {
-    let (server, mut client) = make_pair();
-    let mut server = Connection::from(server);
+    let (mut server, mut client) = make_pair();
 
     {
         let mut good = Good(&mut server);
@@ -258,8 +255,7 @@ async fn stream_handshake() -> io::Result<()> {
 async fn stream_buffered_handshake() -> io::Result<()> {
     use tokio::io::BufWriter;
 
-    let (server, mut client) = make_pair();
-    let mut server = Connection::from(server);
+    let (mut server, mut client) = make_pair();
 
     {
         let mut good = BufWriter::new(Good(&mut server));
@@ -332,8 +328,7 @@ async fn stream_handshake_regression_issues_77() -> io::Result<()> {
 
 #[tokio::test]
 async fn stream_eof() -> io::Result<()> {
-    let (server, mut client) = make_pair();
-    let mut server = Connection::from(server);
+    let (mut server, mut client) = make_pair();
     poll_fn(|cx| do_handshake(&mut client, &mut server, cx)).await?;
 
     let mut bad = Expected(Cursor::new(Vec::new()));
@@ -351,8 +346,7 @@ async fn stream_eof() -> io::Result<()> {
 
 #[tokio::test]
 async fn stream_write_zero() -> io::Result<()> {
-    let (server, mut client) = make_pair();
-    let mut server = Connection::from(server);
+    let (mut server, mut client) = make_pair();
     poll_fn(|cx| do_handshake(&mut client, &mut server, cx)).await?;
 
     let mut io = Eof;
@@ -372,15 +366,15 @@ fn make_pair() -> (ServerConnection, ClientConnection) {
     let (sconfig, cconfig) = utils::make_configs();
     let server = ServerConnection::new(Arc::new(sconfig)).unwrap();
 
-    let domain = ServerName::try_from("foobar.com").unwrap();
-    let client = ClientConnection::new(Arc::new(cconfig), domain).unwrap();
+    let domain = ServerName::try_from("foobar.com").unwrap().to_owned();
+    let client = Arc::new(cconfig).connect(domain).build().unwrap();
 
     (server, client)
 }
 
 fn do_handshake(
     client: &mut ClientConnection,
-    server: &mut Connection,
+    server: &mut ServerConnection,
     cx: &mut Context<'_>,
 ) -> Poll<io::Result<()>> {
     let mut good = Good(server);

@@ -6,6 +6,7 @@ use std::error::Error as StdError;
 use std::sync::Arc;
 
 use argh::FromArgs;
+use rustls::crypto::Identity;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{copy, sink, split, AsyncWriteExt};
@@ -45,9 +46,10 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     let key = PrivateKeyDer::from_pem_file(&options.key)?;
     let flag_echo = options.echo_mode;
 
-    let config = rustls::ServerConfig::builder()
+    let identity = Arc::new(Identity::from_cert_chain(certs)?);
+    let config = rustls::ServerConfig::builder(provider())
         .with_no_client_auth()
-        .with_single_cert(certs, key)?;
+        .with_single_cert(identity, key)?;
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
     let listener = TcpListener::bind(&addr).await?;
@@ -88,5 +90,17 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
                 eprintln!("{:?}", err);
             }
         });
+    }
+}
+
+fn provider() -> Arc<rustls::crypto::CryptoProvider> {
+    #[cfg(feature = "aws_lc_rs")]
+    {
+        return Arc::new(rustls_aws_lc_rs::DEFAULT_PROVIDER.clone());
+    }
+
+    #[cfg(all(not(feature = "aws_lc_rs"), feature = "ring"))]
+    {
+        return Arc::new(rustls_ring::DEFAULT_PROVIDER.clone());
     }
 }

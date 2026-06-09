@@ -9,23 +9,25 @@ readme = "README.md"
 description = "Asynchronous TLS/SSL streams for Tokio using Rustls."
 categories = ["asynchronous", "cryptography", "network-programming"]
 edition = "2021"
-rust-version = "1.71"
+rust-version = "1.85"
 exclude = ["/.github", "/examples", "/scripts", "/tests/"]
 
 [dependencies]
-rustls = { version = "0.23.27", default-features = false, features = ["std"] }
+rustls = { git = "https://github.com/rustls/rustls.git", branch = "main", package = "rustls", version = "0.24.0-dev.0", default-features = false, features = ["webpki"] }
+rustls-aws-lc-rs = { git = "https://github.com/rustls/rustls.git", branch = "main", package = "rustls-aws-lc-rs", version = "0.1.0-dev.0", default-features = false, features = ["aws-lc-sys", "std"], optional = true }
+rustls-ring = { git = "https://github.com/rustls/rustls.git", branch = "main", package = "rustls-ring", version = "0.1.0-dev.0", default-features = false, features = ["std"], optional = true }
 tokio = "1.0"
 
 [features]
 default = ["logging", "tls12", "aws_lc_rs"]
-aws_lc_rs = ["rustls/aws_lc_rs"]
+aws_lc_rs = ["dep:rustls-aws-lc-rs"]
 aws-lc-rs = ["aws_lc_rs"] # Alias because Cargo features commonly use `-`
 brotli = ["rustls/brotli"]
 early-data = []
-fips = ["rustls/fips"]
-logging = ["rustls/logging"]
-ring = ["rustls/ring"]
-tls12 = ["rustls/tls12"]
+fips = ["aws_lc_rs", "rustls-aws-lc-rs/fips"]
+logging = ["rustls/log"]
+ring = ["dep:rustls-ring"]
+tls12 = []
 zlib = ["rustls/zlib"]
 
 [dev-dependencies]
@@ -33,5 +35,6 @@ argh = "0.1.1"
 futures-util = "0.3.1"
 lazy_static = "1.1"
 rcgen = { version = "0.14", features = ["pem"] }
+rustls-util = { git = "https://github.com/rustls/rustls.git", branch = "main", package = "rustls-util", version = "0.1.0", default-features = false }
 tokio = { version = "1.0", features = ["full"] }
 webpki-roots = "1"
