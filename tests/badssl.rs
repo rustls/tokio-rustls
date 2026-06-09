@@ -33,6 +33,27 @@ async fn get(
     Ok((stream, String::from_utf8(buf).unwrap()))
 }
 
+async fn get_with_retries(
+    config: Arc<ClientConfig>,
+    domain: &str,
+    port: u16,
+    vectored: bool,
+) -> io::Result<(TlsStream<TcpStream>, String)> {
+    let mut last_err = None;
+
+    for _ in 0..3 {
+        match get(Arc::clone(&config), domain, port, vectored).await {
+            Ok(output) => return Ok(output),
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset => {
+                last_err = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_err.expect("retry loop records connection reset errors"))
+}
+
 #[tokio::test]
 async fn test_tls12() -> io::Result<()> {
     test_tls12_impl(false).await
@@ -94,7 +115,7 @@ async fn test_modern_impl(vectored: bool) -> io::Result<()> {
     let config = Arc::new(config);
     let domain = "mozilla-modern.badssl.com";
 
-    let (_, output) = get(config.clone(), domain, 443, vectored).await?;
+    let (_, output) = get_with_retries(config.clone(), domain, 443, vectored).await?;
     assert!(
         output.contains("<title>mozilla-modern.badssl.com</title>"),
         "failed badssl test, output: {}",
