@@ -46,9 +46,13 @@ async fn test_tls12_vectored() -> io::Result<()> {
 async fn test_tls12_impl(vectored: bool) -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
+    let mut provider = (*utils::provider()).clone();
+    provider.tls13_cipher_suites = Vec::new().into();
+
+    let config = rustls::ClientConfig::builder(Arc::new(provider))
         .with_root_certificates(root_store)
-        .with_no_client_auth();
+        .with_no_client_auth()
+        .unwrap();
 
     let config = Arc::new(config);
     let domain = "tls-v1-2.badssl.com";
@@ -83,9 +87,10 @@ async fn test_modern_vectored() -> io::Result<()> {
 async fn test_modern_impl(vectored: bool) -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = rustls::ClientConfig::builder()
+    let config = rustls::ClientConfig::builder(utils::provider())
         .with_root_certificates(root_store)
-        .with_no_client_auth();
+        .with_no_client_auth()
+        .unwrap();
     let config = Arc::new(config);
     let domain = "mozilla-modern.badssl.com";
 

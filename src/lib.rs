@@ -48,7 +48,7 @@ use std::task::{Context, Poll};
 
 pub use rustls;
 
-use rustls::CommonState;
+use rustls::ConnectionOutputs;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 macro_rules! ready {
@@ -78,7 +78,7 @@ pub enum TlsStream<T> {
 }
 
 impl<T> TlsStream<T> {
-    pub fn get_ref(&self) -> (&T, &CommonState) {
+    pub fn get_ref(&self) -> (&T, &ConnectionOutputs) {
         use TlsStream::*;
         match self {
             Client(io) => {
@@ -92,19 +92,26 @@ impl<T> TlsStream<T> {
         }
     }
 
-    pub fn get_mut(&mut self) -> (&mut T, &mut CommonState) {
+    pub fn get_mut(&mut self) -> (&mut T, TlsConnectionMut<'_>) {
         use TlsStream::*;
         match self {
             Client(io) => {
                 let (io, session) = io.get_mut();
-                (io, &mut *session)
+                (io, TlsConnectionMut::Client(session))
             }
             Server(io) => {
                 let (io, session) = io.get_mut();
-                (io, &mut *session)
+                (io, TlsConnectionMut::Server(session))
             }
         }
     }
+}
+
+/// Mutable access to either side's rustls connection.
+#[derive(Debug)]
+pub enum TlsConnectionMut<'a> {
+    Client(&'a mut rustls::ClientConnection),
+    Server(&'a mut rustls::ServerConnection),
 }
 
 impl<T> From<client::TlsStream<T>> for TlsStream<T> {

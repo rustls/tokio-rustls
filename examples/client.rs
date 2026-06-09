@@ -51,9 +51,9 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
         root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     }
 
-    let config = rustls::ClientConfig::builder()
+    let config = rustls::ClientConfig::builder(provider())
         .with_root_certificates(root_cert_store)
-        .with_no_client_auth(); // i guess this was previously the default?
+        .with_no_client_auth()?; // i guess this was previously the default?
     let connector = TlsConnector::from(Arc::new(config));
 
     let stream = TcpStream::connect(&addr).await?;
@@ -77,4 +77,16 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     }
 
     Ok(())
+}
+
+fn provider() -> Arc<rustls::crypto::CryptoProvider> {
+    #[cfg(feature = "aws_lc_rs")]
+    {
+        return Arc::new(rustls_aws_lc_rs::DEFAULT_PROVIDER.clone());
+    }
+
+    #[cfg(all(not(feature = "aws_lc_rs"), feature = "ring"))]
+    {
+        return Arc::new(rustls_ring::DEFAULT_PROVIDER.clone());
+    }
 }

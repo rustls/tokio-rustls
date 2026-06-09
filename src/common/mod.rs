@@ -1,9 +1,8 @@
 use std::io::{self, BufRead as _, IoSlice, Read, Write};
-use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use rustls::{ConnectionCommon, SideData};
+use rustls::Connection as RustlsConnection;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 mod handshake;
@@ -66,10 +65,9 @@ pub(crate) struct Stream<'a, IO, C> {
     pub(crate) need_flush: bool,
 }
 
-impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> Stream<'a, IO, C>
+impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C> Stream<'a, IO, C>
 where
-    C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
-    SD: SideData,
+    C: RustlsConnection,
 {
     pub(crate) fn new(io: &'a mut IO, session: &'a mut C) -> Self {
         Stream {
@@ -188,10 +186,7 @@ where
         }
     }
 
-    pub(crate) fn poll_fill_buf(mut self, cx: &mut Context<'_>) -> Poll<io::Result<&'a [u8]>>
-    where
-        SD: 'a,
-    {
+    pub(crate) fn poll_fill_buf(mut self, cx: &mut Context<'_>) -> Poll<io::Result<&'a [u8]>> {
         let mut io_pending = false;
 
         // read a packet
@@ -231,10 +226,9 @@ where
     }
 }
 
-impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncRead for Stream<'a, IO, C>
+impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C> AsyncRead for Stream<'a, IO, C>
 where
-    C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
-    SD: SideData + 'a,
+    C: RustlsConnection + 'a,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -249,10 +243,9 @@ where
     }
 }
 
-impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncBufRead for Stream<'a, IO, C>
+impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C> AsyncBufRead for Stream<'a, IO, C>
 where
-    C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
-    SD: SideData + 'a,
+    C: RustlsConnection + 'a,
 {
     fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         let this = self.get_mut();
@@ -270,10 +263,9 @@ where
     }
 }
 
-impl<IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncWrite for Stream<'_, IO, C>
+impl<IO: AsyncRead + AsyncWrite + Unpin, C> AsyncWrite for Stream<'_, IO, C>
 where
-    C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
-    SD: SideData,
+    C: RustlsConnection,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,

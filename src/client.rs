@@ -12,7 +12,10 @@ use std::{
     sync::Arc,
 };
 
-use rustls::{pki_types::ServerName, ClientConfig, ClientConnection};
+use rustls::{
+    enums::ApplicationProtocol, pki_types::ServerName, ClientConfig, ClientConnection,
+    Connection as _,
+};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::common::{IoSession, MidHandshake, Stream, TlsState};
@@ -64,15 +67,25 @@ impl TlsConnector {
         IO: AsyncRead + AsyncWrite + Unpin,
         F: FnOnce(&mut ClientConnection),
     {
-        let alpn = alpn_protocols.unwrap_or_else(|| self.inner.alpn_protocols.clone());
-        let mut session = match ClientConnection::new_with_alpn(self.inner.clone(), domain, alpn) {
+        let builder = self.inner.connect(domain);
+        let builder = if let Some(alpn_protocols) = alpn_protocols {
+            builder.with_alpn(
+                alpn_protocols
+                    .into_iter()
+                    .map(ApplicationProtocol::from)
+                    .collect(),
+            )
+        } else {
+            builder
+        };
+        let mut session = match builder.build() {
             Ok(session) => session,
             Err(error) => {
                 return Connect(MidHandshake::Error {
                     io: stream,
                     // TODO(eliza): should this really return an `io::Error`?
                     // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
+                    error: io::Error::other(error),
                 });
             }
         };

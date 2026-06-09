@@ -162,7 +162,10 @@ async fn test_lazy_config_acceptor() -> io::Result<()> {
     let start = acceptor.await.unwrap();
     let ch = start.client_hello();
 
-    assert_eq!(ch.server_name(), Some("foobar.com"));
+    assert_eq!(
+        ch.server_name().map(|name| name.as_ref()),
+        Some("foobar.com")
+    );
     assert_eq!(
         ch.alpn()
             .map(|protos| protos.collect::<Vec<_>>())

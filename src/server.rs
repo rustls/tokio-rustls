@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use rustls::server::AcceptedAlert;
-use rustls::{ServerConfig, ServerConnection};
+use rustls::{Connection as _, ServerConfig, ServerConnection};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::common::{IoSession, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter, TlsState};
@@ -47,7 +47,7 @@ impl TlsAcceptor {
                     io: stream,
                     // TODO(eliza): should this really return an `io::Error`?
                     // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
+                    error: io::Error::other(error),
                 });
             }
         };
@@ -144,10 +144,9 @@ where
             let io = match this.io.as_mut() {
                 Some(io) => io,
                 None => {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::Other,
+                    return Poll::Ready(Err(io::Error::other(
                         "acceptor cannot be polled after acceptance",
-                    )))
+                    )));
                 }
             };
 
