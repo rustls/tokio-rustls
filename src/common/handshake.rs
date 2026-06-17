@@ -33,6 +33,16 @@ pub(crate) enum MidHandshake<IS: IoSession> {
     },
 }
 
+impl<IS: IoSession> MidHandshake<IS> {
+    pub(crate) fn take_io(&mut self) -> Option<IS::Io> {
+        match mem::replace(self, Self::End) {
+            Self::Handshaking(stream) => Some(stream.into_io()),
+            Self::SendAlert { io, .. } | Self::Error { io, .. } => Some(io),
+            Self::End => None,
+        }
+    }
+}
+
 impl<IS, SD> Future for MidHandshake<IS>
 where
     IS: IoSession + Unpin,
