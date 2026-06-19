@@ -23,7 +23,10 @@ impl<IS: IoSession> HandshakeFuture<IS> {
     /// The deadline is fixed to `Instant::now() + duration` immediately, so the
     /// clock starts ticking when this is called, not when the future is first polled.
     pub(crate) fn new(inner: MidHandshake<IS>, timeout: Option<Duration>) -> Self {
-        Self::from_deadline(inner, timeout.map(|d| Instant::now() + d))
+        Self {
+            inner,
+            timeout: timeout.map(Timeout::from_duration),
+        }
     }
 
     /// Construct with an absolute `Instant` deadline.
@@ -33,10 +36,7 @@ impl<IS: IoSession> HandshakeFuture<IS> {
     pub(crate) fn from_deadline(inner: MidHandshake<IS>, deadline: Option<Instant>) -> Self {
         Self {
             inner,
-            timeout: deadline.map(|deadline| Timeout {
-                deadline,
-                sleep: None,
-            }),
+            timeout: deadline.map(Timeout::from_deadline),
         }
     }
 
@@ -65,11 +65,7 @@ where
             Some(timeout) => timeout,
             None => return Poll::Pending,
         };
-
-        let sleep = timeout
-            .sleep
-            .get_or_insert_with(|| Box::pin(sleep_until(timeout.deadline)));
-        if sleep.as_mut().poll(cx).is_pending() {
+        if timeout.poll_deadline(cx).is_pending() {
             return Poll::Pending;
         }
 
@@ -87,7 +83,41 @@ where
     }
 }
 
-struct Timeout {
+/// An absolute deadline paired with a lazily-initialized `Sleep` future.
+pub(crate) struct Timeout {
     deadline: Instant,
     sleep: Option<Pin<Box<Sleep>>>,
+}
+
+impl Timeout {
+    /// Construct from an absolute deadline.
+    pub(crate) fn from_deadline(deadline: Instant) -> Self {
+        Self {
+            deadline,
+            sleep: None,
+        }
+    }
+
+    /// Construct from a relative duration.
+    ///
+    /// The deadline is fixed to `Instant::now() + duration` immediately.
+    pub(crate) fn from_duration(duration: Duration) -> Self {
+        Self::from_deadline(Instant::now() + duration)
+    }
+
+    /// Poll the deadline.
+    ///
+    /// Returns `Poll::Ready(())` once the deadline has elapsed; `Poll::Pending`
+    /// otherwise. Lazily initializes the inner `Sleep` on first call.
+    pub(crate) fn poll_deadline(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        let sleep = self
+            .sleep
+            .get_or_insert_with(|| Box::pin(sleep_until(self.deadline)));
+        sleep.as_mut().poll(cx)
+    }
+
+    /// Return the absolute deadline.
+    pub(crate) fn deadline(&self) -> Instant {
+        self.deadline
+    }
 }

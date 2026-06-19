@@ -9,7 +9,7 @@ use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 mod handshake;
 mod timeout;
 pub(crate) use handshake::{IoSession, MidHandshake};
-pub(crate) use timeout::HandshakeFuture;
+pub(crate) use timeout::{HandshakeFuture, Timeout};
 
 #[derive(Debug)]
 pub(crate) enum TlsState {
