@@ -15,12 +15,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  RUSTFLAGS: --deny warnings
+
 jobs:
   check:
     runs-on: ubuntu-latest
-
-    env:
-      RUSTFLAGS: "-D warnings"
 
     steps:
       - name: Checkout sources
@@ -40,9 +40,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macOS-latest, windows-latest]
         rust: [stable]
-
-    env:
-      RUSTFLAGS: "-D warnings"
 
     steps:
       - name: Checkout sources
@@ -88,7 +85,7 @@ jobs:
 
       - name: Run cargo clippy
         if: always()
-        run: cargo clippy --locked --all-features -- -D warnings
+        run: cargo clippy --locked --all-features
 
   msrv:
     name: MSRV
