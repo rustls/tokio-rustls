@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use rustls::{ConnectionCommon, SideData};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::time::{sleep, Sleep};
+use tokio::time::{Instant, Sleep, sleep_until};
 
 use crate::common::{IoSession, MidHandshake};
 
@@ -18,11 +18,23 @@ pub(crate) struct HandshakeFuture<IS: IoSession> {
 }
 
 impl<IS: IoSession> HandshakeFuture<IS> {
+    /// Construct with a relative `Duration` timeout.
+    ///
+    /// The deadline is fixed to `Instant::now() + duration` immediately, so the
+    /// clock starts ticking when this is called, not when the future is first polled.
     pub(crate) fn new(inner: MidHandshake<IS>, timeout: Option<Duration>) -> Self {
+        Self::from_deadline(inner, timeout.map(|d| Instant::now() + d))
+    }
+
+    /// Construct with an absolute `Instant` deadline.
+    ///
+    /// Used when an earlier phase (e.g. `LazyConfigAcceptor`) already established the
+    /// deadline and the post-ClientHello phase needs to inherit it.
+    pub(crate) fn from_deadline(inner: MidHandshake<IS>, deadline: Option<Instant>) -> Self {
         Self {
             inner,
-            timeout: timeout.map(|duration| Timeout {
-                duration,
+            timeout: deadline.map(|deadline| Timeout {
+                deadline,
                 sleep: None,
             }),
         }
@@ -56,7 +68,7 @@ where
 
         let sleep = timeout
             .sleep
-            .get_or_insert_with(|| Box::pin(sleep(timeout.duration)));
+            .get_or_insert_with(|| Box::pin(sleep_until(timeout.deadline)));
         if sleep.as_mut().poll(cx).is_pending() {
             return Poll::Pending;
         }
@@ -76,6 +88,6 @@ where
 }
 
 struct Timeout {
-    duration: Duration,
+    deadline: Instant,
     sleep: Option<Pin<Box<Sleep>>>,
 }
