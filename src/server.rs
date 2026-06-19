@@ -12,9 +12,11 @@ use std::time::Duration;
 use rustls::server::AcceptedAlert;
 use rustls::{ServerConfig, ServerConnection};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::time::Instant;
 
 use crate::common::{
-    HandshakeFuture, IoSession, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter, TlsState,
+    HandshakeFuture, IoSession, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter, Timeout,
+    TlsState,
 };
 
 /// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
@@ -39,9 +41,11 @@ impl TlsAcceptor {
     /// `None` disables the handshake timeout.
     ///
     /// The timeout applies to handshakes started via [`TlsAcceptor::accept`] and
-    /// [`TlsAcceptor::accept_with`]. It does not apply to handshakes resumed via
-    /// [`LazyConfigAcceptor`] / [`StartHandshake::into_stream`], which proceed
-    /// without a timeout.
+    /// [`TlsAcceptor::accept_with`]. For the lazy-acceptor flow, set the timeout
+    /// on the [`LazyConfigAcceptor`] itself via
+    /// [`LazyConfigAcceptor::with_handshake_timeout`]. The deadline established
+    /// there is inherited by the [`Accept`] returned from
+    /// [`StartHandshake::into_stream`], so a single timeout covers both phases.
     pub fn with_handshake_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.handshake_timeout = timeout;
         self
@@ -97,6 +101,7 @@ pub struct LazyConfigAcceptor<IO> {
     acceptor: rustls::server::Acceptor,
     io: Option<IO>,
     alert: Option<(rustls::Error, AcceptedAlert)>,
+    timeout: Option<Timeout>,
 }
 
 impl<IO> LazyConfigAcceptor<IO>
@@ -109,7 +114,28 @@ where
             acceptor,
             io: Some(io),
             alert: None,
+            timeout: None,
         }
+    }
+
+    /// Set the maximum amount of time to allow for the TLS handshake.
+    ///
+    /// `None` disables the handshake timeout.
+    ///
+    /// The deadline is fixed to `Instant::now() + duration` when this builder
+    /// is called and spans both phases of the lazy-acceptor flow:
+    ///
+    /// 1. The ClientHello phase driven by this `LazyConfigAcceptor`.
+    /// 2. The post-ClientHello phase driven by the [`Accept`] returned from
+    ///    [`StartHandshake::into_stream`].
+    ///
+    /// Both phases race against the same wall-clock deadline, so a single
+    /// timeout covers the full handshake. To set a timeout on handshakes
+    /// driven via [`TlsAcceptor::accept`] instead, use
+    /// [`TlsAcceptor::with_handshake_timeout`].
+    pub fn with_handshake_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.timeout = timeout.map(Timeout::from_duration);
+        self
     }
 
     /// Takes back the client connection. Will return `None` if called more than once or if the
@@ -181,7 +207,7 @@ where
                 match alert.write(&mut SyncWriteAdapter { io, cx }) {
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                         this.alert = Some((err, alert));
-                        return Poll::Pending;
+                        return poll_pending_or_timeout(&mut this.timeout, cx);
                     }
                     Ok(0) | Err(_) => {
                         return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
@@ -197,14 +223,20 @@ where
             match this.acceptor.read_tls(&mut reader) {
                 Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()).into(),
                 Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    return poll_pending_or_timeout(&mut this.timeout, cx);
+                }
                 Err(e) => return Err(e).into(),
             }
 
             match this.acceptor.accept() {
                 Ok(Some(accepted)) => {
                     let io = this.io.take().unwrap();
-                    return Poll::Ready(Ok(StartHandshake { accepted, io }));
+                    return Poll::Ready(Ok(StartHandshake {
+                        accepted,
+                        io,
+                        deadline: this.timeout.as_ref().map(Timeout::deadline),
+                    }));
                 }
                 Ok(None) => {}
                 Err((err, alert)) => {
@@ -213,6 +245,25 @@ where
             }
         }
     }
+}
+
+/// Returns `Poll::Pending`, unless the timeout has elapsed, in which case a `TimedOut`
+/// error is returned. With no timeout configured, always returns `Poll::Pending`.
+fn poll_pending_or_timeout<T>(
+    timeout: &mut Option<Timeout>,
+    cx: &mut Context<'_>,
+) -> Poll<Result<T, io::Error>> {
+    let timeout = match timeout {
+        Some(timeout) => timeout,
+        None => return Poll::Pending,
+    };
+    if timeout.poll_deadline(cx).is_pending() {
+        return Poll::Pending;
+    }
+    Poll::Ready(Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "TLS handshake timed out",
+    )))
 }
 
 /// An incoming connection received through [`LazyConfigAcceptor`].
@@ -226,6 +277,10 @@ where
 pub struct StartHandshake<IO> {
     pub accepted: rustls::server::Accepted,
     pub io: IO,
+    // Handshake deadline inherited from the LazyConfigAcceptor, if any.
+    // Propagated into the Accept returned by into_stream so the timeout
+    // spans both phases of the handshake.
+    pub(crate) deadline: Option<Instant>,
 }
 
 impl<IO> StartHandshake<IO>
@@ -237,6 +292,7 @@ where
         Self {
             accepted,
             io: transport,
+            deadline: None,
         }
     }
 
@@ -255,7 +311,7 @@ where
         let mut conn = match self.accepted.into_connection(config) {
             Ok(conn) => conn,
             Err((error, alert)) => {
-                return Accept(HandshakeFuture::new(
+                return Accept(HandshakeFuture::from_deadline(
                     MidHandshake::SendAlert {
                         io: self.io,
                         alert,
@@ -263,20 +319,20 @@ where
                         // Probably not...
                         error: io::Error::new(io::ErrorKind::InvalidData, error),
                     },
-                    None,
+                    self.deadline,
                 ));
             }
         };
         f(&mut conn);
 
-        Accept(HandshakeFuture::new(
+        Accept(HandshakeFuture::from_deadline(
             MidHandshake::Handshaking(TlsStream {
                 session: conn,
                 io: self.io,
                 state: TlsState::Stream,
                 need_flush: false,
             }),
-            None,
+            self.deadline,
         ))
     }
 }
