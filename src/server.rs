@@ -7,26 +7,46 @@ use std::os::windows::io::{AsRawSocket, RawSocket};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use rustls::server::AcceptedAlert;
 use rustls::{ServerConfig, ServerConnection};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::common::{IoSession, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter, TlsState};
+use crate::common::{
+    HandshakeFuture, IoSession, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter, TlsState,
+};
 
 /// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
 #[derive(Clone)]
 pub struct TlsAcceptor {
     inner: Arc<ServerConfig>,
+    handshake_timeout: Option<Duration>,
 }
 
 impl From<Arc<ServerConfig>> for TlsAcceptor {
     fn from(inner: Arc<ServerConfig>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            handshake_timeout: None,
+        }
     }
 }
 
 impl TlsAcceptor {
+    /// Set the maximum amount of time to allow for TLS handshakes.
+    ///
+    /// `None` disables the handshake timeout.
+    ///
+    /// The timeout applies to handshakes started via [`TlsAcceptor::accept`] and
+    /// [`TlsAcceptor::accept_with`]. It does not apply to handshakes resumed via
+    /// [`LazyConfigAcceptor`] / [`StartHandshake::into_stream`], which proceed
+    /// without a timeout.
+    pub fn with_handshake_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.handshake_timeout = timeout;
+        self
+    }
+
     #[inline]
     pub fn accept<IO>(&self, stream: IO) -> Accept<IO>
     where
@@ -43,22 +63,28 @@ impl TlsAcceptor {
         let mut session = match ServerConnection::new(self.inner.clone()) {
             Ok(session) => session,
             Err(error) => {
-                return Accept(MidHandshake::Error {
-                    io: stream,
-                    // TODO(eliza): should this really return an `io::Error`?
-                    // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
-                });
+                return Accept(HandshakeFuture::new(
+                    MidHandshake::Error {
+                        io: stream,
+                        // TODO(eliza): should this really return an `io::Error`?
+                        // Probably not...
+                        error: io::Error::new(io::ErrorKind::Other, error),
+                    },
+                    self.handshake_timeout,
+                ));
             }
         };
         f(&mut session);
 
-        Accept(MidHandshake::Handshaking(TlsStream {
-            session,
-            io: stream,
-            state: TlsState::Stream,
-            need_flush: false,
-        }))
+        Accept(HandshakeFuture::new(
+            MidHandshake::Handshaking(TlsStream {
+                session,
+                io: stream,
+                state: TlsState::Stream,
+                need_flush: false,
+            }),
+            self.handshake_timeout,
+        ))
     }
 
     /// Get a read-only reference to underlying config
@@ -229,29 +255,35 @@ where
         let mut conn = match self.accepted.into_connection(config) {
             Ok(conn) => conn,
             Err((error, alert)) => {
-                return Accept(MidHandshake::SendAlert {
-                    io: self.io,
-                    alert,
-                    // TODO(eliza): should this really return an `io::Error`?
-                    // Probably not...
-                    error: io::Error::new(io::ErrorKind::InvalidData, error),
-                });
+                return Accept(HandshakeFuture::new(
+                    MidHandshake::SendAlert {
+                        io: self.io,
+                        alert,
+                        // TODO(eliza): should this really return an `io::Error`?
+                        // Probably not...
+                        error: io::Error::new(io::ErrorKind::InvalidData, error),
+                    },
+                    None,
+                ));
             }
         };
         f(&mut conn);
 
-        Accept(MidHandshake::Handshaking(TlsStream {
-            session: conn,
-            io: self.io,
-            state: TlsState::Stream,
-            need_flush: false,
-        }))
+        Accept(HandshakeFuture::new(
+            MidHandshake::Handshaking(TlsStream {
+                session: conn,
+                io: self.io,
+                state: TlsState::Stream,
+                need_flush: false,
+            }),
+            None,
+        ))
     }
 }
 
 /// Future returned from `TlsAcceptor::accept` which will resolve
 /// once the accept handshake has finished.
-pub struct Accept<IO>(MidHandshake<TlsStream<IO>>);
+pub struct Accept<IO>(HandshakeFuture<TlsStream<IO>>);
 
 impl<IO> Accept<IO> {
     #[inline]
@@ -260,7 +292,7 @@ impl<IO> Accept<IO> {
     }
 
     pub fn get_ref(&self) -> Option<&IO> {
-        match &self.0 {
+        match self.0.handshake() {
             MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
@@ -269,7 +301,7 @@ impl<IO> Accept<IO> {
     }
 
     pub fn get_mut(&mut self) -> Option<&mut IO> {
-        match &mut self.0 {
+        match self.0.handshake_mut() {
             MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
@@ -282,20 +314,20 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> Future for Accept<IO> {
     type Output = io::Result<TlsStream<IO>>;
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.0).poll(cx).map_err(|(err, _)| err)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().0.poll(cx).map_err(|(err, _)| err)
     }
 }
 
 /// Like [Accept], but returns `IO` on failure.
-pub struct FallibleAccept<IO>(MidHandshake<TlsStream<IO>>);
+pub struct FallibleAccept<IO>(HandshakeFuture<TlsStream<IO>>);
 
 impl<IO: AsyncRead + AsyncWrite + Unpin> Future for FallibleAccept<IO> {
     type Output = Result<TlsStream<IO>, (io::Error, IO)>;
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.0).poll(cx)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().0.poll(cx)
     }
 }
 

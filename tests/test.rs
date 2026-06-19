@@ -179,6 +179,33 @@ async fn handshake_timeout_fallible() {
     assert_eq!(err.kind(), ErrorKind::TimedOut);
 }
 
+#[tokio::test(start_paused = true)]
+async fn accept_handshake_timeout() {
+    let (config, _) = utils::make_configs();
+    let acceptor =
+        TlsAcceptor::from(Arc::new(config)).with_handshake_timeout(Some(HANDSHAKE_TIMEOUT));
+    // The client end is held but never written to. The accept future will block
+    // waiting on the ClientHello and with all tasks pending, the start_paused
+    // runtime advances to the handshake timeout's deadline.
+    let (_client, server) = tokio::io::duplex(4096);
+
+    let err = acceptor.accept(server).await.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TimedOut);
+}
+
+/// accept_handshake_timeout_fallible operates equivalently to accept_handshake_timeout, but for
+/// FallibleAccept.
+#[tokio::test(start_paused = true)]
+async fn accept_handshake_timeout_fallible() {
+    let (config, _) = utils::make_configs();
+    let acceptor =
+        TlsAcceptor::from(Arc::new(config)).with_handshake_timeout(Some(HANDSHAKE_TIMEOUT));
+    let (_client, server) = tokio::io::duplex(4096);
+
+    let (err, _io) = acceptor.accept(server).into_fallible().await.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::TimedOut);
+}
+
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::test]
