@@ -4,12 +4,12 @@ use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
-use rustls::pki_types::ServerName;
 use rustls::ClientConfig;
+use rustls::pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 
 async fn get(
     config: Arc<ClientConfig>,

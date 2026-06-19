@@ -7,9 +7,9 @@ use std::sync::Arc;
 use argh::FromArgs;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName};
-use tokio::io::{copy, split, stdin as tokio_stdin, stdout as tokio_stdout, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt, copy, split, stdin as tokio_stdin, stdout as tokio_stdout};
 use tokio::net::TcpStream;
-use tokio_rustls::{rustls, TlsConnector};
+use tokio_rustls::{TlsConnector, rustls};
 
 /// Tokio Rustls client example
 #[derive(FromArgs)]

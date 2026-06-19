@@ -1,16 +1,15 @@
+use std::error::Error as StdError;
 use std::io;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
-
-use std::error::Error as StdError;
 use std::sync::Arc;
 
 use argh::FromArgs;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use tokio::io::{copy, sink, split, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt, copy, sink, split};
 use tokio::net::TcpListener;
-use tokio_rustls::{rustls, TlsAcceptor};
+use tokio_rustls::{TlsAcceptor, rustls};
 
 /// Tokio Rustls server example
 #[derive(FromArgs)]

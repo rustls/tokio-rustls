@@ -1,18 +1,17 @@
 use std::future::Future;
+use std::io::{self, BufRead as _};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, RawSocket};
 use std::pin::Pin;
+use std::sync::Arc;
 #[cfg(feature = "early-data")]
 use std::task::Waker;
 use std::task::{Context, Poll};
-use std::{
-    io::{self, BufRead as _},
-    sync::Arc,
-};
 
-use rustls::{pki_types::ServerName, ClientConfig, ClientConnection};
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::common::{IoSession, MidHandshake, Stream, TlsState};
