@@ -63,11 +63,12 @@ jobs:
         if: runner.os == 'Windows'
         uses: seanmiddleditch/gha-setup-ninja@v6
 
-
       - name: Test
         run: |
           cargo test --locked --all
           cargo test --locked -p tokio-rustls --features early-data --test early-data
+        env:
+          RUST_BACKTRACE: 1
 
   lints:
     name: Lints
