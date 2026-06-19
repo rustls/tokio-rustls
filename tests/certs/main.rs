@@ -2,12 +2,13 @@
 //! Run with `cargo test -- --ignored` when test certificates need updating.
 //! Suitable for test certificates only. Not a production CA ;-)
 
+use std::fs::File;
+use std::io::Write;
+
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose,
 };
-use std::fs::File;
-use std::io::Write;
 
 #[test]
 #[ignore]

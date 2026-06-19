@@ -147,7 +147,7 @@ where
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::Other,
                         "acceptor cannot be polled after acceptance",
-                    )))
+                    )));
                 }
             };
 
@@ -158,7 +158,7 @@ where
                         return Poll::Pending;
                     }
                     Ok(0) | Err(_) => {
-                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)))
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
                     }
                     Ok(_) => {
                         this.alert = Some((err, alert));

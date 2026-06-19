@@ -9,8 +9,8 @@ use rustls::pki_types::ServerName;
 use rustls::{self, ClientConfig, ServerConnection, Stream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 
 async fn send<S: AsyncRead + AsyncWrite + Unpin>(
     config: Arc<ClientConfig>,
@@ -59,35 +59,37 @@ async fn test_0rtt_impl<S: AsyncRead + AsyncWrite + Unpin>(
 
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let server_port = listener.local_addr().unwrap().port();
-    thread::spawn(move || loop {
-        let (mut sock, _addr) = listener.accept().unwrap();
+    thread::spawn(move || {
+        loop {
+            let (mut sock, _addr) = listener.accept().unwrap();
 
-        let server = Arc::clone(&server);
-        thread::spawn(move || {
-            let mut conn = ServerConnection::new(server).unwrap();
-            conn.complete_io(&mut sock).unwrap();
+            let server = Arc::clone(&server);
+            thread::spawn(move || {
+                let mut conn = ServerConnection::new(server).unwrap();
+                conn.complete_io(&mut sock).unwrap();
 
-            if let Some(mut early_data) = conn.early_data() {
-                let mut buf = Vec::new();
-                early_data.read_to_end(&mut buf).unwrap();
-                let mut stream = Stream::new(&mut conn, &mut sock);
-                stream.write_all(b"EARLY:").unwrap();
-                stream.write_all(&buf).unwrap();
-            }
-
-            let mut stream = Stream::new(&mut conn, &mut sock);
-            stream.write_all(b"LATE:").unwrap();
-            loop {
-                let mut buf = [0; 1024];
-                let n = stream.read(&mut buf).unwrap();
-                if n == 0 {
-                    conn.send_close_notify();
-                    conn.complete_io(&mut sock).unwrap();
-                    break;
+                if let Some(mut early_data) = conn.early_data() {
+                    let mut buf = Vec::new();
+                    early_data.read_to_end(&mut buf).unwrap();
+                    let mut stream = Stream::new(&mut conn, &mut sock);
+                    stream.write_all(b"EARLY:").unwrap();
+                    stream.write_all(&buf).unwrap();
                 }
-                stream.write_all(&buf[..n]).unwrap();
-            }
-        });
+
+                let mut stream = Stream::new(&mut conn, &mut sock);
+                stream.write_all(b"LATE:").unwrap();
+                loop {
+                    let mut buf = [0; 1024];
+                    let n = stream.read(&mut buf).unwrap();
+                    if n == 0 {
+                        conn.send_close_notify();
+                        conn.complete_io(&mut sock).unwrap();
+                        break;
+                    }
+                    stream.write_all(&buf[..n]).unwrap();
+                }
+            });
+        }
     });
 
     client.enable_early_data = true;

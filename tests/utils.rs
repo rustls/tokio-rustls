@@ -4,10 +4,9 @@ mod utils {
     use std::pin::Pin;
     use std::task::{Context, Poll};
 
-    use rustls::{
-        pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer},
-        ClientConfig, RootCertStore, ServerConfig,
-    };
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use rustls::{ClientConfig, RootCertStore, ServerConfig};
     use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 
     #[allow(dead_code)]

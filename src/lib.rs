@@ -47,7 +47,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 pub use rustls;
-
 use rustls::CommonState;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 

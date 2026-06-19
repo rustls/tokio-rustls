@@ -2,16 +2,16 @@
 
 use std::io::{Cursor, ErrorKind};
 use std::net::SocketAddr;
-use std::sync::mpsc::channel;
 use std::sync::Arc;
+use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::{io, thread};
 
 use futures_util::future::TryFutureExt;
 use lazy_static::lazy_static;
-use rustls::pki_types::ServerName;
 use rustls::ClientConfig;
-use tokio::io::{copy, split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use rustls::pki_types::ServerName;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy, split};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::{runtime, time};
