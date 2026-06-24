@@ -53,7 +53,7 @@ async fn test_tls12_impl(vectored: bool) -> io::Result<()> {
     let config = Arc::new(config);
     let domain = "tls-v1-2.badssl.com";
 
-    let (_, output) = get(config.clone(), domain, 1012, vectored).await?;
+    let (_, output) = get(config, domain, 1012, vectored).await?;
     assert!(
         output.contains("<title>tls-v1-2.badssl.com</title>"),
         "failed badssl test, output: {}",
@@ -89,7 +89,7 @@ async fn test_modern_impl(vectored: bool) -> io::Result<()> {
     let config = Arc::new(config);
     let domain = "mozilla-modern.badssl.com";
 
-    let (_, output) = get(config.clone(), domain, 443, vectored).await?;
+    let (_, output) = get(config, domain, 443, vectored).await?;
     assert!(
         output.contains("<title>mozilla-modern.badssl.com</title>"),
         "failed badssl test, output: {}",
