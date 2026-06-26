@@ -9,22 +9,32 @@ use std::sync::Arc;
 #[cfg(feature = "early-data")]
 use std::task::Waker;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::common::{IoSession, MidHandshake, Stream, TlsState};
+use crate::common::{HandshakeFuture, IoSession, MidHandshake, Stream, TlsState};
 
 /// A wrapper around a `rustls::ClientConfig`, providing an async `connect` method.
 #[derive(Clone)]
 pub struct TlsConnector {
     inner: Arc<ClientConfig>,
+    handshake_timeout: Option<Duration>,
     #[cfg(feature = "early-data")]
     early_data: bool,
 }
 
 impl TlsConnector {
+    /// Set the maximum amount of time to allow for TLS handshakes.
+    ///
+    /// `None` disables the handshake timeout.
+    pub fn with_handshake_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.handshake_timeout = timeout;
+        self
+    }
+
     /// Enable 0-RTT.
     ///
     /// If you want to use 0-RTT,
@@ -67,36 +77,42 @@ impl TlsConnector {
         let mut session = match ClientConnection::new_with_alpn(self.inner.clone(), domain, alpn) {
             Ok(session) => session,
             Err(error) => {
-                return Connect(MidHandshake::Error {
-                    io: stream,
-                    // TODO(eliza): should this really return an `io::Error`?
-                    // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
-                });
+                return Connect(HandshakeFuture::new(
+                    MidHandshake::Error {
+                        io: stream,
+                        // TODO(eliza): should this really return an `io::Error`?
+                        // Probably not...
+                        error: io::Error::new(io::ErrorKind::Other, error),
+                    },
+                    self.handshake_timeout,
+                ));
             }
         };
         f(&mut session);
 
-        Connect(MidHandshake::Handshaking(TlsStream {
-            io: stream,
+        Connect(HandshakeFuture::new(
+            MidHandshake::Handshaking(TlsStream {
+                io: stream,
 
-            #[cfg(not(feature = "early-data"))]
-            state: TlsState::Stream,
+                #[cfg(not(feature = "early-data"))]
+                state: TlsState::Stream,
 
-            #[cfg(feature = "early-data")]
-            state: if self.early_data && session.early_data().is_some() {
-                TlsState::EarlyData(0, Vec::new())
-            } else {
-                TlsState::Stream
-            },
+                #[cfg(feature = "early-data")]
+                state: if self.early_data && session.early_data().is_some() {
+                    TlsState::EarlyData(0, Vec::new())
+                } else {
+                    TlsState::Stream
+                },
 
-            need_flush: false,
+                need_flush: false,
 
-            #[cfg(feature = "early-data")]
-            early_waker: None,
+                #[cfg(feature = "early-data")]
+                early_waker: None,
 
-            session,
-        }))
+                session,
+            }),
+            self.handshake_timeout,
+        ))
     }
 
     pub fn with_alpn(&self, alpn_protocols: Vec<Vec<u8>>) -> TlsConnectorWithAlpn<'_> {
@@ -116,6 +132,7 @@ impl From<Arc<ClientConfig>> for TlsConnector {
     fn from(inner: Arc<ClientConfig>) -> Self {
         Self {
             inner,
+            handshake_timeout: None,
             #[cfg(feature = "early-data")]
             early_data: false,
         }
@@ -150,7 +167,7 @@ impl TlsConnectorWithAlpn<'_> {
 
 /// Future returned from `TlsConnector::connect` which will resolve
 /// once the connection handshake has finished.
-pub struct Connect<IO>(MidHandshake<TlsStream<IO>>);
+pub struct Connect<IO>(HandshakeFuture<TlsStream<IO>>);
 
 impl<IO> Connect<IO> {
     #[inline]
@@ -159,7 +176,7 @@ impl<IO> Connect<IO> {
     }
 
     pub fn get_ref(&self) -> Option<&IO> {
-        match &self.0 {
+        match self.0.handshake() {
             MidHandshake::Handshaking(sess) => Some(sess.get_ref().0),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
@@ -168,7 +185,7 @@ impl<IO> Connect<IO> {
     }
 
     pub fn get_mut(&mut self) -> Option<&mut IO> {
-        match &mut self.0 {
+        match self.0.handshake_mut() {
             MidHandshake::Handshaking(sess) => Some(sess.get_mut().0),
             MidHandshake::SendAlert { io, .. } => Some(io),
             MidHandshake::Error { io, .. } => Some(io),
@@ -181,8 +198,8 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> Future for Connect<IO> {
     type Output = io::Result<TlsStream<IO>>;
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.0).poll(cx).map_err(|(err, _)| err)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().0.poll(cx).map_err(|(err, _)| err)
     }
 }
 
@@ -190,13 +207,13 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> Future for FallibleConnect<IO> {
     type Output = Result<TlsStream<IO>, (io::Error, IO)>;
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.0).poll(cx)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().0.poll(cx)
     }
 }
 
 /// Like [Connect], but returns `IO` on failure.
-pub struct FallibleConnect<IO>(MidHandshake<TlsStream<IO>>);
+pub struct FallibleConnect<IO>(HandshakeFuture<TlsStream<IO>>);
 
 /// A wrapper around an underlying raw stream which implements the TLS or SSL
 /// protocol.
