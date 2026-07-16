@@ -10,11 +10,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use argh::FromArgs;
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncWriteExt, copy, sink, split};
 use tokio::net::TcpListener;
-use tokio_rustls::{TlsAcceptor, rustls};
+use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
@@ -29,7 +30,7 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     let key = PrivateKeyDer::from_pem_file(&options.key)?;
     let flag_echo = options.echo_mode;
 
-    let config = rustls::ServerConfig::builder()
+    let config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
     let acceptor = TlsAcceptor::from(Arc::new(config));
