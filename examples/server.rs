@@ -1,3 +1,8 @@
+//! A simple example using tokio-rustls to build an echo/HTTP server.
+//!
+//! When -echo_mode is provided, data read by the server is written back to the client.
+//! Otherwise, a fixed HTTP 200 is returned to all requests.
+
 use std::error::Error as StdError;
 use std::io;
 use std::net::ToSocketAddrs;
