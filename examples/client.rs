@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
 
     let config = rustls::ClientConfig::builder()
         .with_root_certificates(root_cert_store)
-        .with_no_client_auth(); // i guess this was previously the default?
+        .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
     let stream = TcpStream::connect(&addr).await?;
