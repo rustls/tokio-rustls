@@ -27,6 +27,12 @@ impl From<Arc<ServerConfig>> for TlsAcceptor {
 }
 
 impl TlsAcceptor {
+    /// Returns a future for completing a TLS handshake for a client using `stream`.
+    ///
+    /// You likely want to wrap this in a timeout (for example with [`tokio::time::timeout`][])
+    /// to bound the handshake time.
+    ///
+    /// [`tokio::time::timeout`]: https://docs.rs/tokio/latest/tokio/time/fn.timeout.html
     #[inline]
     pub fn accept<IO>(&self, stream: IO) -> Accept<IO>
     where
@@ -35,6 +41,18 @@ impl TlsAcceptor {
         self.accept_with(stream, |_| ())
     }
 
+    /// Similar to [`Self::accept()`], but calls `f` before performing the handshake.
+    ///
+    /// As with [`Self::accept()`] you likely want to wrap this in a timeout to
+    /// bound the handshake time.
+    ///
+    /// The `f` handler is given a mutable reference to a [`ServerConnection`][] that can be used
+    /// to configure the connection before the handshake, for example, adjusting the buffer limit.
+    ///
+    /// Because no data has been read from `stream` yet when `f` is called ClientHello
+    /// dependent state (like early data) is not yet available.
+    ///
+    /// [`ServerConnection`]: https://docs.rs/rustls/latest/rustls/server/struct.ServerConnection.html
     pub fn accept_with<IO, F>(&self, stream: IO, f: F) -> Accept<IO>
     where
         IO: AsyncRead + AsyncWrite + Unpin,
@@ -67,6 +85,14 @@ impl TlsAcceptor {
     }
 }
 
+/// A future for reading a `ClientHello` from `io` without committing to a [`ServerConfig`][].
+///
+/// Awaiting it yields a [`StartHandshake`], which exposes the
+/// [`ClientHello`][] (for example, to choose a config based on SNI) and performs
+/// the rest of the handshake via [`StartHandshake::into_stream()`].
+///
+/// [`ServerConfig`]: https://docs.rs/rustls/latest/rustls/server/struct.ServerConfig.html
+/// [`ClientHello`]: https://docs.rs/rustls/latest/rustls/server/struct.ClientHello.html
 pub struct LazyConfigAcceptor<IO> {
     acceptor: rustls::server::Acceptor,
     io: Option<IO>,
@@ -77,6 +103,22 @@ impl<IO> LazyConfigAcceptor<IO>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
+    /// Returns a new `LazyConfigAcceptor` that reads a `ClientHello` from `io`.
+    ///
+    /// You likely want to wrap awaiting the acceptor in a timeout to bound how long the
+    /// peer may take to send the `ClientHello`.
+    ///
+    /// Note that awaiting the acceptor is only the first half of the handshake and
+    /// [`StartHandshake::into_stream()`] performs the rest.
+    ///
+    /// To bound the time for the complete handshake, share one deadline across
+    /// both awaits (for example with [`tokio::time::timeout_at`][]) rather than giving each
+    /// its own timeout.
+    ///
+    /// If a timeout elapses before the `ClientHello` arrives, [`Self::take_io()`] can
+    /// recover the `io`, for example to answer the peer in plaintext before closing.
+    ///
+    /// [`tokio::time::timeout_at`]: https://docs.rs/tokio/latest/tokio/time/fn.timeout_at.html
     #[inline]
     pub fn new(acceptor: rustls::server::Acceptor, io: IO) -> Self {
         Self {
@@ -218,10 +260,27 @@ where
         self.accepted.client_hello()
     }
 
+    /// Returns a future that performs the rest of the TLS handshake using `config`.
+    ///
+    /// You likely want to wrap this in a timeout to bound the handshake time. Ideally
+    /// with [`tokio::time::timeout_at`][], reusing the deadline that also bounded
+    /// awaiting the [`LazyConfigAcceptor`] so both halves of the handshake share
+    /// one budget. See [`LazyConfigAcceptor::new()`].
+    ///
+    /// [`tokio::time::timeout_at`]: https://docs.rs/tokio/latest/tokio/time/fn.timeout_at.html
     pub fn into_stream(self, config: Arc<ServerConfig>) -> Accept<IO> {
         self.into_stream_with(config, |_| ())
     }
 
+    /// Similar to [`Self::into_stream()`], but calls `f` before performing the handshake.
+    ///
+    /// As with [`Self::into_stream()`] you likely want to wrap this in a timeout to
+    /// bound the handshake time.
+    ///
+    /// The `f` handler is given a mutable reference to a [`ServerConnection`][] that can be
+    /// used to configure the connection before the handshake.
+    ///
+    /// [`ServerConnection`]: https://docs.rs/rustls/latest/rustls/server/struct.ServerConnection.html
     pub fn into_stream_with<F>(self, config: Arc<ServerConfig>, f: F) -> Accept<IO>
     where
         F: FnOnce(&mut ServerConnection),
