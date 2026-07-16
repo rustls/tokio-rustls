@@ -13,26 +13,6 @@ use tokio::io::{AsyncWriteExt, copy, split, stdin as tokio_stdin, stdout as toki
 use tokio::net::TcpStream;
 use tokio_rustls::{TlsConnector, rustls};
 
-/// Tokio Rustls client example
-#[derive(FromArgs)]
-struct Options {
-    /// host
-    #[argh(positional)]
-    host: String,
-
-    /// port
-    #[argh(option, short = 'p', default = "443")]
-    port: u16,
-
-    /// domain
-    #[argh(option, short = 'd')]
-    domain: Option<String>,
-
-    /// cafile
-    #[argh(option, short = 'c')]
-    cafile: Option<PathBuf>,
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     let options: Options = argh::from_env();
@@ -79,4 +59,24 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     }
 
     Ok(())
+}
+
+/// Tokio Rustls client example
+#[derive(FromArgs)]
+struct Options {
+    /// host
+    #[argh(positional)]
+    host: String,
+
+    /// port
+    #[argh(option, short = 'p', default = "443")]
+    port: u16,
+
+    /// domain
+    #[argh(option, short = 'd')]
+    domain: Option<String>,
+
+    /// cafile
+    #[argh(option, short = 'c')]
+    cafile: Option<PathBuf>,
 }
