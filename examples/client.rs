@@ -1,3 +1,5 @@
+//! A simple example using tokio-rustls to make an HTTP GET request.
+
 use std::error::Error as StdError;
 use std::io;
 use std::net::ToSocketAddrs;
