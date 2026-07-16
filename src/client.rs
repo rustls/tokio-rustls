@@ -35,6 +35,12 @@ impl TlsConnector {
         self
     }
 
+    /// Returns a future that performs a TLS handshake with `domain` using the `stream`.
+    ///
+    /// You likely want to wrap this in a timeout (for example with [`tokio::time::timeout`][])
+    /// to bound the handshake time.
+    ///
+    /// [`tokio::time::timeout`]: https://docs.rs/tokio/latest/tokio/time/fn.timeout.html
     #[inline]
     pub fn connect<IO>(&self, domain: ServerName<'static>, stream: IO) -> Connect<IO>
     where
@@ -43,6 +49,15 @@ impl TlsConnector {
         self.connect_impl(domain, stream, None, |_| ())
     }
 
+    /// Similar to [`Self::connect()`], but calls `f` before performing the handshake.
+    ///
+    /// As with [`Self::connect()`] you likely want to wrap this in a timeout to
+    /// bound the handshake time.
+    ///
+    /// The `f` handler is given a mutable reference to a [`ClientConnection`][] that can
+    /// be used for tasks like writing early data.
+    ///
+    /// [`ClientConnection`]: https://docs.rs/rustls/latest/rustls/client/struct.ClientConnection.html
     #[inline]
     pub fn connect_with<IO, F>(&self, domain: ServerName<'static>, stream: IO, f: F) -> Connect<IO>
     where
@@ -128,6 +143,12 @@ pub struct TlsConnectorWithAlpn<'c> {
 }
 
 impl TlsConnectorWithAlpn<'_> {
+    /// Returns a future that performs a TLS handshake with `domain` using the `stream`.
+    ///
+    /// You likely want to wrap this in a timeout (for example with [`tokio::time::timeout`][])
+    /// to bound the handshake time.
+    ///
+    /// [`tokio::time::timeout`]: https://docs.rs/tokio/latest/tokio/time/fn.timeout.html
     #[inline]
     pub fn connect<IO>(self, domain: ServerName<'static>, stream: IO) -> Connect<IO>
     where
@@ -137,6 +158,15 @@ impl TlsConnectorWithAlpn<'_> {
             .connect_impl(domain, stream, Some(self.alpn_protocols), |_| ())
     }
 
+    /// Similar to [`Self::connect()`], but calls `f` before performing the handshake.
+    ///
+    /// As with [`Self::connect()`] you likely want to wrap this in a timeout to
+    /// bound the handshake time.
+    ///
+    /// The `f` handler is given a mutable reference to a [`ClientConnection`][] that can
+    /// be used for tasks like writing early data.
+    ///
+    /// [`ClientConnection`]: https://docs.rs/rustls/latest/rustls/client/struct.ClientConnection.html
     #[inline]
     pub fn connect_with<IO, F>(self, domain: ServerName<'static>, stream: IO, f: F) -> Connect<IO>
     where
