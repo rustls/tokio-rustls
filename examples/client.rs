@@ -7,11 +7,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use argh::FromArgs;
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, ServerName};
 use tokio::io::{AsyncWriteExt, copy, split, stdin as tokio_stdin, stdout as tokio_stdout};
 use tokio::net::TcpStream;
-use tokio_rustls::{TlsConnector, rustls};
+use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
@@ -24,7 +25,7 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     let domain = options.domain.unwrap_or(options.host);
     let content = format!("GET / HTTP/1.0\r\nHost: {}\r\n\r\n", domain);
 
-    let mut root_cert_store = rustls::RootCertStore::empty();
+    let mut root_cert_store = RootCertStore::empty();
     if let Some(cafile) = &options.cafile {
         for cert in CertificateDer::pem_file_iter(cafile)? {
             root_cert_store.add(cert?)?;
@@ -33,7 +34,7 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
         root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     }
 
-    let config = rustls::ClientConfig::builder()
+    let config = ClientConfig::builder()
         .with_root_certificates(root_cert_store)
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
