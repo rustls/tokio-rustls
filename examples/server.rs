@@ -1,7 +1,6 @@
-//! A simple example using tokio-rustls to build an echo/HTTP server.
+//! A simple example using tokio-rustls to build an echo server.
 //!
-//! When -echo_mode is provided, data read by the server is written back to the client.
-//! Otherwise, a fixed HTTP 200 is returned to all requests.
+//! Data read by the server is written back to the client.
 
 use std::error::Error as StdError;
 use std::io;
@@ -10,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use argh::FromArgs;
-use tokio::io::{AsyncWriteExt, copy, sink, split};
+use tokio::io::{AsyncWriteExt, copy, split};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::ServerConfig;
@@ -28,7 +27,6 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
         .ok_or_else(|| io::Error::from(io::ErrorKind::AddrNotAvailable))?;
     let certs = CertificateDer::pem_file_iter(&options.cert)?.collect::<Result<Vec<_>, _>>()?;
     let key = PrivateKeyDer::from_pem_file(&options.key)?;
-    let flag_echo = options.echo_mode;
 
     let config = ServerConfig::builder()
         .with_no_client_auth()
@@ -42,28 +40,12 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
         let acceptor = acceptor.clone();
 
         let fut = async move {
-            let mut stream = acceptor.accept(stream).await?;
+            let stream = acceptor.accept(stream).await?;
 
-            if flag_echo {
-                let (mut reader, mut writer) = split(stream);
-                let n = copy(&mut reader, &mut writer).await?;
-                writer.flush().await?;
-                println!("Echo: {} - {}", peer_addr, n);
-            } else {
-                let mut output = sink();
-                stream
-                    .write_all(
-                        &b"HTTP/1.0 200 ok\r\n\
-                    Connection: close\r\n\
-                    Content-length: 12\r\n\
-                    \r\n\
-                    Hello world!"[..],
-                    )
-                    .await?;
-                stream.shutdown().await?;
-                copy(&mut stream, &mut output).await?;
-                println!("Hello: {}", peer_addr);
-            }
+            let (mut reader, mut writer) = split(stream);
+            let n = copy(&mut reader, &mut writer).await?;
+            writer.flush().await?;
+            println!("Echo: {} - {}", peer_addr, n);
 
             Ok(()) as io::Result<()>
         };
@@ -90,8 +72,4 @@ struct Options {
     /// key file
     #[argh(option, short = 'k')]
     key: PathBuf,
-
-    /// echo mode
-    #[argh(switch, short = 'e')]
-    echo_mode: bool,
 }
