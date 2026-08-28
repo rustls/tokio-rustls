@@ -26,7 +26,7 @@ use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::{self, ClientConfig, RootCertStore};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
@@ -49,9 +49,9 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     }
 
     let connector = TlsConnector::from(Arc::new(
-        ClientConfig::builder()
+        ClientConfig::builder(provider())
             .with_root_certificates(root_cert_store)
-            .with_no_client_auth(),
+            .with_no_client_auth()?,
     ));
 
     // TCP connect, bounded by the connect timeout.
@@ -161,5 +161,22 @@ async fn with_timeout<T>(
             io::ErrorKind::TimedOut,
             format!("{phase} timed out after {duration:?}"),
         )),
+    }
+}
+
+fn provider() -> Arc<rustls::crypto::CryptoProvider> {
+    #[cfg(feature = "aws_lc_rs")]
+    {
+        Arc::new(rustls_aws_lc_rs::DEFAULT_PROVIDER.clone())
+    }
+
+    #[cfg(all(not(feature = "aws_lc_rs"), feature = "ring"))]
+    {
+        Arc::new(rustls_ring::DEFAULT_PROVIDER.clone())
+    }
+
+    #[cfg(not(any(feature = "aws_lc_rs", feature = "ring")))]
+    {
+        panic!("enable either the `aws_lc_rs` or `ring` feature")
     }
 }

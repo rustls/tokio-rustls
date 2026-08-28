@@ -133,7 +133,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.71"
+          toolchain: "1.85"
 
       - run: cargo check --locked --lib --features "aws_lc_rs, aws-lc-rs, early-data, fips, logging, ring, tls12"
 
@@ -148,7 +148,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.75"
+          toolchain: "1.85"
 
       - run: cargo check --locked --lib --all-features
 

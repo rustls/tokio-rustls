@@ -20,10 +20,10 @@ use argh::FromArgs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Instant, timeout, timeout_at};
-use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::rustls::crypto::Identity;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use tokio_rustls::rustls::server::Acceptor;
+use tokio_rustls::rustls::{self, ServerConfig};
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::{LazyConfigAcceptor, TlsAcceptor};
 
@@ -41,13 +41,12 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     let io_timeout = Duration::from_secs(options.io_timeout);
     let shutdown_timeout = Duration::from_secs(options.shutdown_timeout);
 
+    let certs = CertificateDer::pem_file_iter(&options.cert)?.collect::<Result<Vec<_>, _>>()?;
+    let identity = Arc::new(Identity::from_cert_chain(certs)?);
     let config = Arc::new(
-        ServerConfig::builder()
+        ServerConfig::builder(provider())
             .with_no_client_auth()
-            .with_single_cert(
-                CertificateDer::pem_file_iter(&options.cert)?.collect::<Result<_, _>>()?,
-                PrivateKeyDer::from_pem_file(&options.key)?,
-            )?,
+            .with_single_cert(identity, PrivateKeyDer::from_pem_file(&options.key)?)?,
     );
     let acceptor = TlsAcceptor::from(config.clone());
     let listener = TcpListener::bind(&addr).await?;
@@ -133,7 +132,7 @@ async fn accept_lazy(
 ) -> io::Result<TlsStream<TcpStream>> {
     let deadline = Instant::now() + handshake_timeout;
 
-    let acceptor = LazyConfigAcceptor::new(Acceptor::default(), stream);
+    let acceptor = LazyConfigAcceptor::new(stream);
     tokio::pin!(acceptor);
 
     // Read the ClientHello, respecting the deadline.
@@ -156,7 +155,7 @@ async fn accept_lazy(
 
     // The ClientHello is now available, e.g. for SNI-based config selection.
     if let Some(sni) = start.client_hello().server_name() {
-        println!("ClientHello with SNI: {sni}");
+        println!("ClientHello with SNI: {}", sni.as_ref());
     }
 
     // Complete the handshake, respecting the deadline.
@@ -219,5 +218,22 @@ async fn with_timeout<T>(
             io::ErrorKind::TimedOut,
             format!("{phase} timed out after {duration:?}"),
         )),
+    }
+}
+
+fn provider() -> Arc<rustls::crypto::CryptoProvider> {
+    #[cfg(feature = "aws_lc_rs")]
+    {
+        Arc::new(rustls_aws_lc_rs::DEFAULT_PROVIDER.clone())
+    }
+
+    #[cfg(all(not(feature = "aws_lc_rs"), feature = "ring"))]
+    {
+        Arc::new(rustls_ring::DEFAULT_PROVIDER.clone())
+    }
+
+    #[cfg(not(any(feature = "aws_lc_rs", feature = "ring")))]
+    {
+        panic!("enable either the `aws_lc_rs` or `ring` feature")
     }
 }

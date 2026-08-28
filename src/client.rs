@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::io::{self, BufRead as _};
+use std::io;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -10,11 +10,16 @@ use std::sync::Arc;
 use std::task::Waker;
 use std::task::{Context, Poll};
 
+#[cfg(feature = "early-data")]
+use rustls::crypto::cipher::OutboundPlain;
+use rustls::enums::ApplicationProtocol;
 use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection};
+use rustls::{ClientConfig, ClientConnection, Connection as _, VecInput};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::common::{IoSession, MidHandshake, Stream, TlsState};
+#[cfg(feature = "early-data")]
+use crate::common::DEFAULT_BUFFER_LIMIT;
+use crate::common::{CursorVec, IoSession, IoSessionParts, MidHandshake, Stream, TlsState};
 
 /// A wrapper around a `rustls::ClientConfig`, providing an async `connect` method.
 #[derive(Clone)]
@@ -78,15 +83,26 @@ impl TlsConnector {
         IO: AsyncRead + AsyncWrite + Unpin,
         F: FnOnce(&mut ClientConnection),
     {
-        let alpn = alpn_protocols.unwrap_or_else(|| self.inner.alpn_protocols.clone());
-        let mut session = match ClientConnection::new_with_alpn(self.inner.clone(), domain, alpn) {
+        let builder = self.inner.connect(domain);
+        let builder = if let Some(alpn_protocols) = alpn_protocols {
+            builder.with_alpn(
+                alpn_protocols
+                    .into_iter()
+                    .map(ApplicationProtocol::from)
+                    .collect(),
+            )
+        } else {
+            builder
+        };
+        let mut tls = Vec::new();
+        let mut session = match builder.build(&mut tls) {
             Ok(session) => session,
             Err(error) => {
                 return Connect(MidHandshake::Error {
                     io: stream,
                     // TODO(eliza): should this really return an `io::Error`?
                     // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
+                    error: io::Error::other(error),
                 });
             }
         };
@@ -111,6 +127,9 @@ impl TlsConnector {
             early_waker: None,
 
             session,
+            input: VecInput::default(),
+            tls: CursorVec::from_vec(tls),
+            plaintext: CursorVec::default(),
         }))
     }
 
@@ -234,6 +253,9 @@ pub struct FallibleConnect<IO>(MidHandshake<TlsStream<IO>>);
 pub struct TlsStream<IO> {
     pub(crate) io: IO,
     pub(crate) session: ClientConnection,
+    pub(crate) input: VecInput,
+    pub(crate) tls: CursorVec,
+    pub(crate) plaintext: CursorVec,
     pub(crate) state: TlsState,
     pub(crate) need_flush: bool,
 
@@ -252,6 +274,9 @@ impl<IO> TlsStream<IO> {
         (&mut self.io, &mut self.session)
     }
 
+    /// Extract the transport and rustls connection.
+    ///
+    /// Any buffered TLS or plaintext data is discarded.
     #[inline]
     pub fn into_inner(self) -> (IO, ClientConnection) {
         (self.io, self.session)
@@ -288,18 +313,21 @@ impl<IO> IoSession for TlsStream<IO> {
     }
 
     #[inline]
-    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session, &mut bool) {
-        (
-            &mut self.state,
-            &mut self.io,
-            &mut self.session,
-            &mut self.need_flush,
-        )
+    fn get_mut(&mut self) -> IoSessionParts<'_, Self::Io, Self::Session> {
+        IoSessionParts {
+            state: &mut self.state,
+            io: &mut self.io,
+            session: &mut self.session,
+            input: &mut self.input,
+            tls: &mut self.tls,
+            plaintext: &mut self.plaintext,
+            need_flush: &mut self.need_flush,
+        }
     }
 
     #[inline]
-    fn into_io(self) -> Self::Io {
-        self.io
+    fn into_io_tls(self) -> (Self::Io, CursorVec) {
+        (self.io, self.tls)
     }
 }
 
@@ -356,8 +384,14 @@ where
             }
             TlsState::Stream | TlsState::WriteShutdown => {
                 let this = self.get_mut();
-                let stream =
-                    Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+                let stream = Stream::new(
+                    &mut this.io,
+                    &mut this.session,
+                    &mut this.input,
+                    &mut this.tls,
+                    &mut this.plaintext,
+                )
+                .set_eof(!this.state.readable());
 
                 match stream.poll_fill_buf(cx) {
                     Poll::Ready(Ok(buf)) => {
@@ -379,7 +413,7 @@ where
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        self.session.reader().consume(amt);
+        self.plaintext.consume(amt);
     }
 }
 
@@ -395,9 +429,15 @@ where
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream = Stream::new(&mut this.io, &mut this.session)
-            .set_eof(!this.state.readable())
-            .set_need_flush(this.need_flush);
+        let mut stream = Stream::new(
+            &mut this.io,
+            &mut this.session,
+            &mut this.input,
+            &mut this.tls,
+            &mut this.plaintext,
+        )
+        .set_eof(!this.state.readable())
+        .set_need_flush(this.need_flush);
 
         #[cfg(feature = "early-data")]
         {
@@ -411,7 +451,10 @@ where
             )?;
             match written {
                 Poll::Ready(0) => {}
-                Poll::Ready(written) => return Poll::Ready(Ok(written)),
+                Poll::Ready(written) => {
+                    this.need_flush = stream.need_flush;
+                    return Poll::Ready(Ok(written));
+                }
                 Poll::Pending => {
                     this.need_flush = stream.need_flush;
                     return Poll::Pending;
@@ -430,9 +473,15 @@ where
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream = Stream::new(&mut this.io, &mut this.session)
-            .set_eof(!this.state.readable())
-            .set_need_flush(this.need_flush);
+        let mut stream = Stream::new(
+            &mut this.io,
+            &mut this.session,
+            &mut this.input,
+            &mut this.tls,
+            &mut this.plaintext,
+        )
+        .set_eof(!this.state.readable())
+        .set_need_flush(this.need_flush);
 
         #[cfg(feature = "early-data")]
         {
@@ -445,7 +494,10 @@ where
             )?;
             match written {
                 Poll::Ready(0) => {}
-                Poll::Ready(written) => return Poll::Ready(Ok(written)),
+                Poll::Ready(written) => {
+                    this.need_flush = stream.need_flush;
+                    return Poll::Ready(Ok(written));
+                }
                 Poll::Pending => {
                     this.need_flush = stream.need_flush;
                     return Poll::Pending;
@@ -463,9 +515,15 @@ where
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let mut stream = Stream::new(&mut this.io, &mut this.session)
-            .set_eof(!this.state.readable())
-            .set_need_flush(this.need_flush);
+        let mut stream = Stream::new(
+            &mut this.io,
+            &mut this.session,
+            &mut this.input,
+            &mut this.tls,
+            &mut this.plaintext,
+        )
+        .set_eof(!this.state.readable())
+        .set_need_flush(this.need_flush);
 
         #[cfg(feature = "early-data")]
         {
@@ -495,13 +553,20 @@ where
         }
 
         if self.state.writeable() {
-            self.session.send_close_notify();
+            let this = self.as_mut().get_mut();
+            this.session.send_close_notify(this.tls.append_vec());
             self.state.shutdown_write();
         }
 
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(
+            &mut this.io,
+            &mut this.session,
+            &mut this.input,
+            &mut this.tls,
+            &mut this.plaintext,
+        )
+        .set_eof(!this.state.readable());
         stream.as_mut_pin().poll_shutdown(cx)
     }
 }
@@ -518,24 +583,32 @@ where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
     if let TlsState::EarlyData(pos, data) = state {
-        use std::io::Write;
+        while !stream.tls.is_empty() {
+            match stream.write_io(cx) {
+                Poll::Ready(Ok(0)) | Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(_)) => {}
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+            }
+        }
 
         // write early data
         if let Some(mut early_data) = stream.session.early_data() {
             let mut written = 0;
+            let mut available = DEFAULT_BUFFER_LIMIT;
 
             for buf in bufs {
-                if buf.is_empty() {
+                if buf.is_empty() || available == 0 {
                     continue;
                 }
 
-                let len = match early_data.write(buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(err) => return Poll::Ready(Err(err)),
-                };
+                let buf = &buf[..buf.len().min(available)];
+                let len = early_data.write_tls(OutboundPlain::from(buf), stream.tls.append_vec());
+                if len == 0 {
+                    break;
+                }
 
                 written += len;
+                available -= len;
                 data.extend_from_slice(&buf[..len]);
 
                 if len < buf.len() {
@@ -544,6 +617,12 @@ where
             }
 
             if written != 0 {
+                while !stream.tls.is_empty() {
+                    match stream.write_io(cx) {
+                        Poll::Ready(Ok(0)) | Poll::Pending | Poll::Ready(Err(_)) => break,
+                        Poll::Ready(Ok(_)) => {}
+                    }
+                }
                 return Poll::Ready(Ok(written));
             }
         }
