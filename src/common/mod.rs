@@ -1,13 +1,96 @@
-use std::io::{self, BufRead as _, IoSlice, Read, Write};
-use std::ops::{Deref, DerefMut};
+use std::io::{self, IoSlice, Read, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use rustls::{ConnectionCommon, SideData};
+use rustls::crypto::cipher::OutboundPlain;
+use rustls::{Connection as RustlsConnection, VecInput};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
+pub(crate) const DEFAULT_BUFFER_LIMIT: usize = 64 * 1024;
+
 mod handshake;
-pub(crate) use handshake::{IoSession, MidHandshake};
+pub(crate) use handshake::{IoSession, IoSessionParts, MidHandshake};
+
+/// A `Vec<u8>` with an advancing read cursor.
+///
+/// Rustls appends output to a `Vec<u8>`, while Tokio may consume that output a
+/// little at a time. Keeping a cursor avoids shifting the remaining bytes on
+/// every partial read or write.
+#[derive(Default)]
+pub(crate) struct CursorVec {
+    bytes: Vec<u8>,
+    start: usize,
+}
+
+impl std::fmt::Debug for CursorVec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.pending(), f)
+    }
+}
+
+impl CursorVec {
+    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
+        Self { bytes, start: 0 }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.bytes.len() - self.start
+    }
+
+    pub(crate) fn pending(&self) -> &[u8] {
+        &self.bytes[self.start..]
+    }
+
+    pub(crate) fn consume(&mut self, amount: usize) {
+        assert!(amount <= self.len());
+        self.start += amount;
+
+        if self.start == self.bytes.len() {
+            self.bytes.clear();
+            self.start = 0;
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.bytes.clear();
+        self.start = 0;
+    }
+
+    /// Returns the backing vector for APIs that only append to it.
+    ///
+    /// The vector may still contain a consumed prefix, so callers must not
+    /// inspect or replace its existing contents.
+    ///
+    /// Compact only after at least half the stored bytes have been consumed.
+    /// This bounds the retained prefix across appends while making compaction
+    /// amortized linear.
+    pub(crate) fn append_vec(&mut self) -> &mut Vec<u8> {
+        let remaining = self.len();
+        if remaining == 0 {
+            self.clear();
+        } else if self.start >= remaining {
+            self.bytes.copy_within(self.start.., 0);
+            self.bytes.truncate(remaining);
+            self.start = 0;
+        }
+
+        &mut self.bytes
+    }
+
+    #[cfg(test)]
+    fn into_pending_vec(mut self) -> Vec<u8> {
+        let remaining = self.len();
+        if self.start != 0 {
+            self.bytes.copy_within(self.start.., 0);
+            self.bytes.truncate(remaining);
+        }
+        self.bytes
+    }
+}
 
 #[derive(Debug)]
 pub(crate) enum TlsState {
@@ -62,19 +145,30 @@ impl TlsState {
 pub(crate) struct Stream<'a, IO, C> {
     pub(crate) io: &'a mut IO,
     pub(crate) session: &'a mut C,
+    pub(crate) input: &'a mut VecInput,
+    pub(crate) tls: &'a mut CursorVec,
+    pub(crate) plaintext: &'a mut CursorVec,
     pub(crate) eof: bool,
     pub(crate) need_flush: bool,
 }
 
-impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> Stream<'a, IO, C>
+impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C> Stream<'a, IO, C>
 where
-    C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
-    SD: SideData,
+    C: RustlsConnection,
 {
-    pub(crate) fn new(io: &'a mut IO, session: &'a mut C) -> Self {
+    pub(crate) fn new(
+        io: &'a mut IO,
+        session: &'a mut C,
+        input: &'a mut VecInput,
+        tls: &'a mut CursorVec,
+        plaintext: &'a mut CursorVec,
+    ) -> Self {
         Stream {
             io,
             session,
+            input,
+            tls,
+            plaintext,
             // The state so far is only used to detect EOF, so both Stream
             // and EarlyData states should be acceptable.
             eof: false,
@@ -100,30 +194,51 @@ where
     pub(crate) fn read_io(&mut self, cx: &mut Context) -> Poll<io::Result<usize>> {
         let mut reader = SyncReadAdapter { io: self.io, cx };
 
-        let n = match self.session.read_tls(&mut reader) {
+        let n = match self.input.read(&mut reader) {
             Ok(n) => n,
             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
             Err(err) => return Poll::Ready(Err(err)),
         };
 
-        self.session.process_new_packets().map_err(|err| {
+        let processed = self
+            .session
+            .process_new_packets(self.input, self.tls.append_vec())
+            .handle_all(self.plaintext.append_vec());
+
+        if let Err(err) = processed {
             // In case we have an alert to send describing this error,
             // try a last-gasp write -- but don't predate the primary
             // error.
             let _ = self.write_io(cx);
 
-            io::Error::new(io::ErrorKind::InvalidData, err)
-        })?;
+            return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
+        }
 
         Poll::Ready(Ok(n))
     }
 
     pub(crate) fn write_io(&mut self, cx: &mut Context) -> Poll<io::Result<usize>> {
-        let mut writer = SyncWriteAdapter { io: self.io, cx };
+        if self.tls.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
 
-        match self.session.write_tls(&mut writer) {
-            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
-            result => Poll::Ready(result),
+        let available = self.tls.len();
+        match Pin::new(&mut self.io).poll_write(cx, self.tls.pending()) {
+            Poll::Ready(Ok(n)) if n > available => {
+                // The amount actually written is unknowable after a broken
+                // AsyncWrite implementation violates its contract.
+                self.tls.clear();
+                Poll::Ready(Err(io::Error::other(format!(
+                    "illegal poll_write() return value ({n} > {available})"
+                ))))
+            }
+            Poll::Ready(Ok(n)) => {
+                self.tls.consume(n);
+                self.need_flush |= n != 0;
+                Poll::Ready(Ok(n))
+            }
+            Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+            Poll::Pending => Poll::Pending,
         }
     }
 
@@ -135,7 +250,7 @@ where
             let mut write_would_block = false;
             let mut read_would_block = false;
 
-            while self.session.wants_write() {
+            while !self.tls.is_empty() {
                 match self.write_io(cx) {
                     Poll::Ready(Ok(0)) => return Poll::Ready(Err(io::ErrorKind::WriteZero.into())),
                     Poll::Ready(Ok(n)) => {
@@ -188,16 +303,18 @@ where
         }
     }
 
-    pub(crate) fn poll_fill_buf(mut self, cx: &mut Context<'_>) -> Poll<io::Result<&'a [u8]>>
-    where
-        SD: 'a,
-    {
+    pub(crate) fn poll_fill_buf(mut self, cx: &mut Context<'_>) -> Poll<io::Result<&'a [u8]>> {
+        if !self.plaintext.is_empty() {
+            return Poll::Ready(Ok(self.plaintext.pending()));
+        }
+
         let mut io_pending = false;
 
         // read a packet
-        while !self.eof && self.session.wants_read() {
+        while self.plaintext.is_empty() && !self.eof && self.session.wants_read() {
             match self.read_io(cx) {
                 Poll::Ready(Ok(0)) => {
+                    self.eof = true;
                     break;
                 }
                 Poll::Ready(Ok(_)) => (),
@@ -209,32 +326,39 @@ where
             }
         }
 
-        match self.session.reader().into_first_chunk() {
-            Ok(buf) => {
-                // Note that this could be empty (i.e. EOF) if a `CloseNotify` has been
-                // received and there is no more buffered data.
-                Poll::Ready(Ok(buf))
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                if !io_pending {
-                    // If `wants_read()` is satisfied, rustls will not return `WouldBlock`.
-                    // But if it does, we can try again.
-                    // If the rustls state is abnormal, it may cause a cyclic wakeup.
-                    // but tokio's cooperative budget will prevent infinite wakeup.
-                    cx.waker().wake_by_ref();
-                }
-
-                Poll::Pending
-            }
-            Err(e) => Poll::Ready(Err(e)),
+        if !self.plaintext.is_empty() {
+            return Poll::Ready(Ok(self.plaintext.pending()));
         }
+
+        if self.eof {
+            return if self.session.wants_read() {
+                Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "peer closed connection without sending TLS close_notify",
+                )))
+            } else {
+                Poll::Ready(Ok(self.plaintext.pending()))
+            };
+        }
+
+        if !self.session.wants_read() {
+            // A close_notify with no remaining plaintext is a clean EOF.
+            return Poll::Ready(Ok(self.plaintext.pending()));
+        }
+
+        if !io_pending {
+            // No operation registered this task's waker. Arrange another poll in
+            // case the connection made internal progress without yielding data.
+            cx.waker().wake_by_ref();
+        }
+
+        Poll::Pending
     }
 }
 
-impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncRead for Stream<'a, IO, C>
+impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C> AsyncRead for Stream<'a, IO, C>
 where
-    C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
-    SD: SideData + 'a,
+    C: RustlsConnection + 'a,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -244,15 +368,14 @@ where
         let data = ready!(self.as_mut().poll_fill_buf(cx))?;
         let amount = buf.remaining().min(data.len());
         buf.put_slice(&data[..amount]);
-        self.session.reader().consume(amount);
+        self.plaintext.consume(amount);
         Poll::Ready(Ok(()))
     }
 }
 
-impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncBufRead for Stream<'a, IO, C>
+impl<'a, IO: AsyncRead + AsyncWrite + Unpin, C> AsyncBufRead for Stream<'a, IO, C>
 where
-    C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
-    SD: SideData + 'a,
+    C: RustlsConnection + 'a,
 {
     fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         let this = self.get_mut();
@@ -260,55 +383,62 @@ where
             // reborrow
             io: this.io,
             session: this.session,
-            ..*this
+            input: this.input,
+            tls: this.tls,
+            plaintext: this.plaintext,
+            eof: this.eof,
+            need_flush: this.need_flush,
         }
         .poll_fill_buf(cx)
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        self.session.reader().consume(amt);
+        self.plaintext.consume(amt);
     }
 }
 
-impl<IO: AsyncRead + AsyncWrite + Unpin, C, SD> AsyncWrite for Stream<'_, IO, C>
+impl<IO: AsyncRead + AsyncWrite + Unpin, C> AsyncWrite for Stream<'_, IO, C>
 where
-    C: DerefMut + Deref<Target = ConnectionCommon<SD>>,
-    SD: SideData,
+    C: RustlsConnection,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let mut pos = 0;
-
-        while pos != buf.len() {
-            let mut would_block = false;
-
-            match self.session.writer().write(&buf[pos..]) {
-                Ok(n) => pos += n,
-                Err(err) => return Poll::Ready(Err(err)),
-            };
-
-            while self.session.wants_write() {
-                match self.write_io(cx) {
-                    Poll::Ready(Ok(0)) | Poll::Pending => {
-                        would_block = true;
-                        break;
-                    }
-                    Poll::Ready(Ok(_)) => (),
-                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                }
-            }
-
-            return match (pos, would_block) {
-                (0, true) => Poll::Pending,
-                (n, true) => Poll::Ready(Ok(n)),
-                (_, false) => continue,
-            };
+        if buf.is_empty() {
+            return Poll::Ready(Ok(0));
         }
 
-        Poll::Ready(Ok(pos))
+        // Do not grow the caller-owned TLS output buffer without bound. Pending
+        // output must make progress before we accept more plaintext.
+        while !self.tls.is_empty() {
+            match self.write_io(cx) {
+                Poll::Ready(Ok(0)) | Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(_)) => {}
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+            }
+        }
+
+        let len = buf.len().min(DEFAULT_BUFFER_LIMIT);
+        let this = &mut *self;
+        if let Err(err) = this
+            .session
+            .write_tls((&buf[..len]).into(), this.tls.append_vec())
+        {
+            return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
+        }
+
+        // The plaintext has been accepted even when the socket now blocks. The
+        // generated TLS bytes remain in `tls` for the next poll.
+        while !self.tls.is_empty() {
+            match self.write_io(cx) {
+                Poll::Ready(Ok(0)) | Poll::Pending | Poll::Ready(Err(_)) => break,
+                Poll::Ready(Ok(_)) => {}
+            }
+        }
+
+        Poll::Ready(Ok(len))
     }
 
     fn poll_write_vectored(
@@ -320,27 +450,40 @@ where
             return Poll::Ready(Ok(0));
         }
 
-        loop {
-            let mut would_block = false;
-            let written = self.session.writer().write_vectored(bufs)?;
-
-            while self.session.wants_write() {
-                match self.write_io(cx) {
-                    Poll::Ready(Ok(0)) | Poll::Pending => {
-                        would_block = true;
-                        break;
-                    }
-                    Poll::Ready(Ok(_)) => (),
-                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                }
+        while !self.tls.is_empty() {
+            match self.write_io(cx) {
+                Poll::Ready(Ok(0)) | Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(_)) => {}
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
             }
-
-            return match (written, would_block) {
-                (0, true) => Poll::Pending,
-                (0, false) => continue,
-                (n, _) => Poll::Ready(Ok(n)),
-            };
         }
+
+        let mut available = DEFAULT_BUFFER_LIMIT;
+        let slices: Vec<&[u8]> = bufs
+            .iter()
+            .map(|buf| {
+                let take = buf.len().min(available);
+                available -= take;
+                &buf[..take]
+            })
+            .collect();
+        let written = slices.iter().map(|buf| buf.len()).sum();
+        let this = &mut *self;
+        if let Err(err) = this
+            .session
+            .write_tls(OutboundPlain::new(&slices), this.tls.append_vec())
+        {
+            return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
+        }
+
+        while !self.tls.is_empty() {
+            match self.write_io(cx) {
+                Poll::Ready(Ok(0)) | Poll::Pending | Poll::Ready(Err(_)) => break,
+                Poll::Ready(Ok(_)) => {}
+            }
+        }
+
+        Poll::Ready(Ok(written))
     }
 
     #[inline]
@@ -349,17 +492,23 @@ where
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        self.session.writer().flush()?;
-        while self.session.wants_write() {
+        while !self.tls.is_empty() {
             if ready!(self.write_io(cx))? == 0 {
                 return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
             }
         }
-        Pin::new(&mut self.io).poll_flush(cx)
+
+        match Pin::new(&mut self.io).poll_flush(cx) {
+            Poll::Ready(Ok(())) => {
+                self.need_flush = false;
+                Poll::Ready(Ok(()))
+            }
+            poll => poll,
+        }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        while self.session.wants_write() {
+        while !self.tls.is_empty() {
             if ready!(self.write_io(cx))? == 0 {
                 return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
             }
@@ -430,6 +579,46 @@ impl<T: AsyncWrite + Unpin> Write for SyncWriteAdapter<'_, '_, T> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.poll_with(|io, cx| io.poll_flush(cx))
+    }
+}
+
+#[cfg(test)]
+mod cursor_vec_tests {
+    use super::CursorVec;
+
+    #[test]
+    fn preserves_pending_bytes_across_compaction() {
+        let mut buffer = CursorVec::from_vec(b"abcdef".to_vec());
+        buffer.consume(2);
+        buffer.append_vec().extend_from_slice(b"gh");
+        buffer.consume(3);
+        buffer.append_vec().extend_from_slice(b"ij");
+
+        assert_eq!(buffer.pending(), b"fghij");
+        assert_eq!(buffer.into_pending_vec(), b"fghij");
+    }
+
+    #[test]
+    fn repeated_small_consumption_and_append_keeps_storage_bounded() {
+        let mut buffer = CursorVec::from_vec(vec![0, 1]);
+
+        for byte in 2..=u8::MAX {
+            buffer.consume(1);
+            buffer.append_vec().push(byte);
+
+            assert_eq!(buffer.len(), 2);
+            assert!(buffer.bytes.len() <= 2 * buffer.len());
+        }
+
+        assert_eq!(buffer.pending(), &[u8::MAX - 1, u8::MAX]);
+    }
+
+    #[test]
+    fn debug_only_shows_pending_bytes() {
+        let mut buffer = CursorVec::from_vec(vec![1, 2, 3]);
+        buffer.consume(2);
+
+        assert_eq!(format!("{buffer:?}"), "[3]");
     }
 }
 

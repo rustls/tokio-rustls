@@ -158,11 +158,14 @@ async fn test_lazy_config_acceptor() -> io::Result<()> {
         client.read_to_end(&mut buf).await.unwrap();
     });
 
-    let acceptor = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), sstream);
+    let acceptor = LazyConfigAcceptor::new(sstream);
     let start = acceptor.await.unwrap();
     let ch = start.client_hello();
 
-    assert_eq!(ch.server_name(), Some("foobar.com"));
+    assert_eq!(
+        ch.server_name().map(|name| name.as_ref()),
+        Some("foobar.com")
+    );
     assert_eq!(
         ch.alpn()
             .map(|protos| protos.collect::<Vec<_>>())
@@ -183,7 +186,7 @@ async fn test_lazy_config_acceptor() -> io::Result<()> {
 #[tokio::test]
 async fn lazy_config_acceptor_eof() {
     let buf = Cursor::new(Vec::new());
-    let acceptor = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), buf);
+    let acceptor = LazyConfigAcceptor::new(buf);
 
     let accept_result = match time::timeout(Duration::from_secs(3), acceptor).await {
         Ok(res) => res,
@@ -211,7 +214,7 @@ async fn lazy_config_acceptor_take_io() -> Result<(), rustls::Error> {
         tx.send(buf).unwrap();
     });
 
-    let acceptor = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), sstream);
+    let acceptor = LazyConfigAcceptor::new(sstream);
     futures_util::pin_mut!(acceptor);
     if (acceptor.as_mut().await).is_ok() {
         panic!("Expected Err(err)");
@@ -268,7 +271,7 @@ async fn acceptor_alert() {
         tx.send(buf).unwrap();
     });
 
-    let accept = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), sstream);
+    let accept = LazyConfigAcceptor::new(utils::FlushWrapper::new(sstream));
 
     let Ok(Ok(start_handshake)) = time::timeout(Duration::from_secs(3), accept).await else {
         panic!("timeout");
@@ -289,6 +292,34 @@ async fn acceptor_alert() {
 }
 
 #[tokio::test]
+async fn acceptor_alert_flushes_buffered_writer() {
+    let (sconfig, _) = utils::make_configs();
+    let (mut client, server) = tokio::io::duplex(64);
+
+    let peer = tokio::spawn(async move {
+        client.write_all(b"not tls").await.unwrap();
+        client.shutdown().await.unwrap();
+        let mut received = Vec::new();
+        client.read_to_end(&mut received).await.unwrap();
+        received
+    });
+
+    let acceptor = TlsAcceptor::from(Arc::new(sconfig));
+    let (error, io) = acceptor
+        .accept(utils::FlushWrapper::new(server))
+        .into_fallible()
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(!io.has_pending_output());
+    drop(io);
+
+    let received = peer.await.unwrap();
+    assert_eq!(received, b"\x15\x03\x03\x00\x02\x02\x32");
+}
+
+#[tokio::test]
 async fn lazy_config_acceptor_alert() {
     // Intentionally small so that we have to call alert.write several times
     let (mut cstream, sstream) = tokio::io::duplex(2);
@@ -304,7 +335,7 @@ async fn lazy_config_acceptor_alert() {
         tx.send(buf).unwrap();
     });
 
-    let acceptor = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), sstream);
+    let acceptor = LazyConfigAcceptor::new(utils::FlushWrapper::new(sstream));
 
     let Ok(accept_result) = time::timeout(Duration::from_secs(3), acceptor).await else {
         panic!("timeout");

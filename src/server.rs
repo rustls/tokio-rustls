@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::io::{self, BufRead as _};
+use std::io::{self, Write as _};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -8,11 +8,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use rustls::server::AcceptedAlert;
-use rustls::{ServerConfig, ServerConnection};
+use rustls::server::{NeedsInput, ServerHandshake};
+use rustls::{Connection as _, ServerConfig, ServerConnection, VecInput};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::common::{IoSession, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter, TlsState};
+use crate::common::{
+    CursorVec, IoSession, IoSessionParts, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter,
+    TlsState,
+};
 
 /// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
 #[derive(Clone)]
@@ -47,7 +50,7 @@ impl TlsAcceptor {
     /// bound the handshake time.
     ///
     /// The `f` handler is given a mutable reference to a [`ServerConnection`][] that can be used
-    /// to configure the connection before the handshake, for example, adjusting the buffer limit.
+    /// to configure the connection before the handshake.
     ///
     /// Because no data has been read from `stream` yet when `f` is called ClientHello
     /// dependent state (like early data) is not yet available.
@@ -65,7 +68,7 @@ impl TlsAcceptor {
                     io: stream,
                     // TODO(eliza): should this really return an `io::Error`?
                     // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
+                    error: io::Error::other(error),
                 });
             }
         };
@@ -74,6 +77,9 @@ impl TlsAcceptor {
         Accept(MidHandshake::Handshaking(TlsStream {
             session,
             io: stream,
+            input: VecInput::default(),
+            tls: CursorVec::default(),
+            plaintext: CursorVec::default(),
             state: TlsState::Stream,
             need_flush: false,
         }))
@@ -94,9 +100,12 @@ impl TlsAcceptor {
 /// [`ServerConfig`]: https://docs.rs/rustls/latest/rustls/server/struct.ServerConfig.html
 /// [`ClientHello`]: https://docs.rs/rustls/latest/rustls/server/struct.ClientHello.html
 pub struct LazyConfigAcceptor<IO> {
-    acceptor: rustls::server::Acceptor,
+    handshake: Option<NeedsInput>,
     io: Option<IO>,
-    alert: Option<(rustls::Error, AcceptedAlert)>,
+    input: VecInput,
+    tls: CursorVec,
+    error: Option<io::Error>,
+    flush_error: bool,
 }
 
 impl<IO> LazyConfigAcceptor<IO>
@@ -120,11 +129,14 @@ where
     ///
     /// [`tokio::time::timeout_at`]: https://docs.rs/tokio/latest/tokio/time/fn.timeout_at.html
     #[inline]
-    pub fn new(acceptor: rustls::server::Acceptor, io: IO) -> Self {
+    pub fn new(io: IO) -> Self {
         Self {
-            acceptor,
+            handshake: Some(ServerHandshake::start()),
             io: Some(io),
-            alert: None,
+            input: VecInput::default(),
+            tls: CursorVec::default(),
+            error: None,
+            flush_error: false,
         }
     }
 
@@ -145,7 +157,7 @@ where
     /// let listener = tokio::net::TcpListener::bind("127.0.0.1:4443").await.unwrap();
     /// let (stream, _) = listener.accept().await.unwrap();
     ///
-    /// let acceptor = tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream);
+    /// let acceptor = tokio_rustls::LazyConfigAcceptor::new(stream);
     /// tokio::pin!(acceptor);
     ///
     /// match acceptor.as_mut().await {
@@ -186,45 +198,87 @@ where
             let io = match this.io.as_mut() {
                 Some(io) => io,
                 None => {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::Other,
+                    return Poll::Ready(Err(io::Error::other(
                         "acceptor cannot be polled after acceptance",
                     )));
                 }
             };
 
-            if let Some((err, mut alert)) = this.alert.take() {
-                match alert.write(&mut SyncWriteAdapter { io, cx }) {
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        this.alert = Some((err, alert));
-                        return Poll::Pending;
+            while !this.tls.is_empty() {
+                let available = this.tls.len();
+                match (SyncWriteAdapter { io, cx }).write(this.tls.pending()) {
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
+                    Err(e) => {
+                        return Poll::Ready(Err(this.error.take().unwrap_or(e)));
                     }
-                    Ok(0) | Err(_) => {
-                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
+                    Ok(0) => {
+                        return Poll::Ready(Err(this
+                            .error
+                            .take()
+                            .unwrap_or_else(|| io::ErrorKind::WriteZero.into())));
                     }
-                    Ok(_) => {
-                        this.alert = Some((err, alert));
-                        continue;
+                    Ok(written) if written > available => {
+                        this.tls.clear();
+                        return Poll::Ready(Err(this.error.take().unwrap_or_else(|| {
+                            io::Error::other(format!(
+                                "illegal poll_write() return value ({written} > {available})"
+                            ))
+                        })));
                     }
-                };
+                    Ok(written) => {
+                        this.tls.consume(written);
+                    }
+                }
             }
 
+            if this.error.is_some() {
+                if this.flush_error {
+                    match Pin::new(io).poll_flush(cx) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(_) => {}
+                    }
+                }
+                return Poll::Ready(Err(this.error.take().unwrap()));
+            }
+
+            let Some(handshake) = this.handshake.take() else {
+                return Poll::Ready(Err(io::Error::other(
+                    "acceptor cannot be polled after acceptance",
+                )));
+            };
+
             let mut reader = SyncReadAdapter { io, cx };
-            match this.acceptor.read_tls(&mut reader) {
+            match this.input.read(&mut reader) {
                 Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()).into(),
                 Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    this.handshake = Some(handshake);
+                    return Poll::Pending;
+                }
                 Err(e) => return Err(e).into(),
             }
 
-            match this.acceptor.accept() {
-                Ok(Some(accepted)) => {
+            match handshake.process(&mut this.input, this.tls.append_vec()) {
+                Ok(ServerHandshake::Accepted(accepted)) => {
                     let io = this.io.take().unwrap();
-                    return Poll::Ready(Ok(StartHandshake { accepted, io }));
+                    return Poll::Ready(Ok(StartHandshake {
+                        accepted,
+                        io,
+                        input: std::mem::take(&mut this.input),
+                        tls: std::mem::take(&mut this.tls),
+                    }));
                 }
-                Ok(None) => {}
-                Err((err, alert)) => {
-                    this.alert = Some((err, alert));
+                Ok(ServerHandshake::NeedsInput(next)) => {
+                    this.handshake = Some(next);
+                }
+                Ok(_) => {
+                    return Poll::Ready(Err(io::Error::other(
+                        "unexpected server handshake state before configuration",
+                    )));
+                }
+                Err(error) => {
+                    this.flush_error = !this.tls.is_empty();
+                    this.error = Some(io::Error::new(io::ErrorKind::InvalidData, error));
                 }
             }
         }
@@ -240,20 +294,24 @@ where
 #[non_exhaustive]
 #[derive(Debug)]
 pub struct StartHandshake<IO> {
-    pub accepted: rustls::server::Accepted,
-    pub io: IO,
+    accepted: rustls::server::Accepted,
+    io: IO,
+    input: VecInput,
+    tls: CursorVec,
 }
 
 impl<IO> StartHandshake<IO>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Create a new object from an `IO` transport and prior TLS metadata.
-    pub fn from_parts(accepted: rustls::server::Accepted, transport: IO) -> Self {
-        Self {
-            accepted,
-            io: transport,
-        }
+    /// Returns a reference to the underlying transport.
+    pub fn get_ref(&self) -> &IO {
+        &self.io
+    }
+
+    /// Returns a mutable reference to the underlying transport.
+    pub fn get_mut(&mut self) -> &mut IO {
+        &mut self.io
     }
 
     pub fn client_hello(&self) -> rustls::server::ClientHello<'_> {
@@ -285,15 +343,34 @@ where
     where
         F: FnOnce(&mut ServerConnection),
     {
-        let mut conn = match self.accepted.into_connection(config) {
-            Ok(conn) => conn,
-            Err((error, alert)) => {
-                return Accept(MidHandshake::SendAlert {
-                    io: self.io,
-                    alert,
-                    // TODO(eliza): should this really return an `io::Error`?
-                    // Probably not...
-                    error: io::Error::new(io::ErrorKind::InvalidData, error),
+        let Self {
+            accepted,
+            io,
+            input,
+            mut tls,
+        } = self;
+        let mut conn = match accepted.choose_config(config, tls.append_vec()) {
+            Ok(ServerHandshake::NeedsInput(next)) => next.into_buffered_connection(),
+            Ok(_) => {
+                return Accept(MidHandshake::Error {
+                    io,
+                    error: io::Error::other(
+                        "unexpected server handshake state after choosing configuration",
+                    ),
+                });
+            }
+            Err(error) => {
+                // TODO(eliza): should this really return an `io::Error`?
+                // Probably not...
+                let error = io::Error::new(io::ErrorKind::InvalidData, error);
+                return Accept(if tls.is_empty() {
+                    MidHandshake::Error { io, error }
+                } else {
+                    MidHandshake::SendAlert {
+                        io,
+                        alert: tls,
+                        error,
+                    }
                 });
             }
         };
@@ -301,7 +378,10 @@ where
 
         Accept(MidHandshake::Handshaking(TlsStream {
             session: conn,
-            io: self.io,
+            io,
+            input,
+            tls,
+            plaintext: CursorVec::default(),
             state: TlsState::Stream,
             need_flush: false,
         }))
@@ -364,6 +444,9 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> Future for FallibleAccept<IO> {
 pub struct TlsStream<IO> {
     pub(crate) io: IO,
     pub(crate) session: ServerConnection,
+    pub(crate) input: VecInput,
+    pub(crate) tls: CursorVec,
+    pub(crate) plaintext: CursorVec,
     pub(crate) state: TlsState,
     pub(crate) need_flush: bool,
 }
@@ -379,6 +462,9 @@ impl<IO> TlsStream<IO> {
         (&mut self.io, &mut self.session)
     }
 
+    /// Extract the transport and rustls connection.
+    ///
+    /// Any buffered TLS or plaintext data is discarded.
     #[inline]
     pub fn into_inner(self) -> (IO, ServerConnection) {
         (self.io, self.session)
@@ -395,18 +481,21 @@ impl<IO> IoSession for TlsStream<IO> {
     }
 
     #[inline]
-    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session, &mut bool) {
-        (
-            &mut self.state,
-            &mut self.io,
-            &mut self.session,
-            &mut self.need_flush,
-        )
+    fn get_mut(&mut self) -> IoSessionParts<'_, Self::Io, Self::Session> {
+        IoSessionParts {
+            state: &mut self.state,
+            io: &mut self.io,
+            session: &mut self.session,
+            input: &mut self.input,
+            tls: &mut self.tls,
+            plaintext: &mut self.plaintext,
+            need_flush: &mut self.need_flush,
+        }
     }
 
     #[inline]
-    fn into_io(self) -> Self::Io {
-        self.io
+    fn into_io_tls(self) -> (Self::Io, CursorVec) {
+        (self.io, self.tls)
     }
 }
 
@@ -435,8 +524,14 @@ where
         match self.state {
             TlsState::Stream | TlsState::WriteShutdown => {
                 let this = self.get_mut();
-                let stream =
-                    Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+                let stream = Stream::new(
+                    &mut this.io,
+                    &mut this.session,
+                    &mut this.input,
+                    &mut this.tls,
+                    &mut this.plaintext,
+                )
+                .set_eof(!this.state.readable());
 
                 match stream.poll_fill_buf(cx) {
                     Poll::Ready(Ok(buf)) => {
@@ -460,7 +555,7 @@ where
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        self.session.reader().consume(amt);
+        self.plaintext.consume(amt);
     }
 }
 
@@ -476,8 +571,14 @@ where
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(
+            &mut this.io,
+            &mut this.session,
+            &mut this.input,
+            &mut this.tls,
+            &mut this.plaintext,
+        )
+        .set_eof(!this.state.readable());
         stream.as_mut_pin().poll_write(cx, buf)
     }
 
@@ -489,8 +590,14 @@ where
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(
+            &mut this.io,
+            &mut this.session,
+            &mut this.input,
+            &mut this.tls,
+            &mut this.plaintext,
+        )
+        .set_eof(!this.state.readable());
         stream.as_mut_pin().poll_write_vectored(cx, bufs)
     }
 
@@ -501,20 +608,33 @@ where
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(
+            &mut this.io,
+            &mut this.session,
+            &mut this.input,
+            &mut this.tls,
+            &mut this.plaintext,
+        )
+        .set_eof(!this.state.readable());
         stream.as_mut_pin().poll_flush(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         if self.state.writeable() {
-            self.session.send_close_notify();
+            let this = self.as_mut().get_mut();
+            this.session.send_close_notify(this.tls.append_vec());
             self.state.shutdown_write();
         }
 
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(
+            &mut this.io,
+            &mut this.session,
+            &mut this.input,
+            &mut this.tls,
+            &mut this.plaintext,
+        )
+        .set_eof(!this.state.readable());
         stream.as_mut_pin().poll_shutdown(cx)
     }
 }

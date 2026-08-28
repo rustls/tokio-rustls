@@ -2,8 +2,10 @@ mod utils {
     use std::collections::VecDeque;
     use std::io::IoSlice;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::task::{Context, Poll};
 
+    use rustls::crypto::{CryptoProvider, Identity};
     use rustls::pki_types::pem::PemObject;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     use rustls::{ClientConfig, RootCertStore, ServerConfig};
@@ -24,9 +26,12 @@ mod utils {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let key = PrivateKeyDer::from_pem_slice(EE_KEY.as_bytes()).unwrap();
-        let sconfig = ServerConfig::builder()
+        let identity = Arc::new(Identity::from_cert_chain(cert).unwrap());
+        let provider = provider();
+
+        let sconfig = ServerConfig::builder(provider.clone())
             .with_no_client_auth()
-            .with_single_cert(cert, key)
+            .with_single_cert(identity, key)
             .unwrap();
 
         let mut client_root_cert_store = RootCertStore::empty();
@@ -34,11 +39,30 @@ mod utils {
             client_root_cert_store.add(root.unwrap()).unwrap();
         }
 
-        let cconfig = ClientConfig::builder()
+        let cconfig = ClientConfig::builder(provider)
             .with_root_certificates(client_root_cert_store)
-            .with_no_client_auth();
+            .with_no_client_auth()
+            .unwrap();
 
         (sconfig, cconfig)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn provider() -> Arc<CryptoProvider> {
+        #[cfg(feature = "aws_lc_rs")]
+        {
+            Arc::new(rustls_aws_lc_rs::DEFAULT_PROVIDER.clone())
+        }
+
+        #[cfg(all(not(feature = "aws_lc_rs"), feature = "ring"))]
+        {
+            Arc::new(rustls_ring::DEFAULT_PROVIDER.clone())
+        }
+
+        #[cfg(not(any(feature = "aws_lc_rs", feature = "ring")))]
+        {
+            panic!("enable either the `aws_lc_rs` or `ring` feature")
+        }
     }
 
     #[allow(dead_code)]
@@ -72,6 +96,7 @@ mod utils {
     /// An IO wrapper that never flushes when writing, and always returns pending on first flush.
     ///
     /// This is used to test that rustls always flushes to completion during handshake.
+    #[derive(Debug)]
     pub(crate) struct FlushWrapper<S> {
         stream: S,
         buf: VecDeque<Vec<u8>>,
@@ -86,6 +111,11 @@ mod utils {
                 buf: VecDeque::new(),
                 queued: Vec::new(),
             }
+        }
+
+        #[allow(dead_code)]
+        pub(crate) fn has_pending_output(&self) -> bool {
+            !self.buf.is_empty() || !self.queued.is_empty()
         }
     }
 
