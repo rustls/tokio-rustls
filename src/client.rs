@@ -337,8 +337,21 @@ where
     ) -> Poll<io::Result<()>> {
         let data = ready!(self.as_mut().poll_fill_buf(cx))?;
         let len = data.len().min(buf.remaining());
-        buf.put_slice(&data[..len]);
-        self.consume(len);
+        if len > 0 {
+            buf.put_slice(&data[..len]);
+            self.as_mut().consume(len);
+            while buf.remaining() > 0 {
+                let data = match self.as_mut().poll_fill_buf(cx) {
+                    Poll::Ready(Ok([])) => break,
+                    Poll::Ready(Ok(data)) => data,
+                    Poll::Ready(Err(_)) => break, // non-transient error gets re-emitted next poll
+                    Poll::Pending => break,
+                };
+                let len = data.len().min(buf.remaining());
+                buf.put_slice(&data[..len]);
+                self.as_mut().consume(len);
+            }
+        }
         Poll::Ready(Ok(()))
     }
 }
