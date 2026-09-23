@@ -327,3 +327,107 @@ async fn handshake_flush_pending() -> io::Result<()> {
 
 // Include `utils` module
 include!("utils.rs");
+
+#[tokio::test]
+async fn from_parts_roundtrip() -> io::Result<()> {
+    let (sconfig, cconfig) = utils::make_configs();
+    let (cstream, sstream) = tokio::io::duplex(1200);
+    let domain = ServerName::try_from(utils::TEST_SERVER_DOMAIN)
+        .unwrap()
+        .to_owned();
+
+    let client = tokio::spawn(async move {
+        let connector = TlsConnector::from(Arc::new(cconfig));
+        let mut client = connector.connect(domain, cstream).await?;
+        client.write_all(b"hello, world!").await?;
+        client.flush().await?;
+
+        let (io, session) = client.into_inner();
+        let mut client = tokio_rustls::client::TlsStream::from_parts(io, session);
+
+        let mut buf = [0; 3];
+        client.read_exact(&mut buf).await?;
+        assert_eq!(&buf, b"bye");
+        client.shutdown().await?;
+        assert_eq!(client.read(&mut buf).await?, 0);
+        Ok::<_, io::Error>(())
+    });
+
+    let acceptor = TlsAcceptor::from(Arc::new(sconfig));
+    let mut server = acceptor.accept(sstream).await?;
+
+    // Consume only part of the record so the rest stays buffered in the session.
+    let mut buf = [0; 5];
+    server.read_exact(&mut buf).await?;
+    assert_eq!(&buf, b"hello");
+
+    let (io, session) = server.into_inner();
+    let mut server = tokio_rustls::server::TlsStream::from_parts(io, session);
+
+    let mut buf = [0; 8];
+    server.read_exact(&mut buf).await?;
+    assert_eq!(&buf, b", world!");
+
+    server.write_all(b"bye").await?;
+    server.flush().await?;
+    assert_eq!(server.read(&mut buf).await?, 0);
+    server.shutdown().await?;
+
+    client.await.unwrap()
+}
+
+// Move an established server-side stream to a runtime on another thread.
+#[tokio::test]
+async fn from_parts_across_runtimes() -> io::Result<()> {
+    let (sconfig, cconfig) = utils::make_configs();
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+    let addr = listener.local_addr()?;
+
+    let server = tokio::spawn(async move {
+        let acceptor = TlsAcceptor::from(Arc::new(sconfig));
+        let (stream, _) = listener.accept().await?;
+        let stream = acceptor.accept(stream).await?;
+
+        // Detach the socket from this runtime and hand the established
+        // connection to a runtime on another thread, which re-registers it.
+        let (io, session) = stream.into_inner();
+        let io = io.into_std()?;
+        let worker = thread::spawn(move || {
+            runtime::Builder::new_current_thread()
+                .enable_io()
+                .build()?
+                .block_on(async move {
+                    let io = TcpStream::from_std(io)?;
+                    let mut stream = tokio_rustls::server::TlsStream::from_parts(io, session);
+
+                    let mut buf = [0; 4];
+                    stream.read_exact(&mut buf).await?;
+                    assert_eq!(&buf, b"ping");
+                    stream.write_all(b"pong").await?;
+                    stream.flush().await?;
+                    assert_eq!(stream.read(&mut buf).await?, 0);
+                    stream.shutdown().await
+                })
+        });
+        tokio::task::spawn_blocking(move || worker.join().unwrap())
+            .await
+            .unwrap()
+    });
+
+    let domain = ServerName::try_from(utils::TEST_SERVER_DOMAIN)
+        .unwrap()
+        .to_owned();
+    let connector = TlsConnector::from(Arc::new(cconfig));
+    let stream = TcpStream::connect(addr).await?;
+    let mut client = connector.connect(domain, stream).await?;
+    client.write_all(b"ping").await?;
+    client.flush().await?;
+
+    let mut buf = [0; 4];
+    client.read_exact(&mut buf).await?;
+    assert_eq!(&buf, b"pong");
+    client.shutdown().await?;
+    assert_eq!(client.read(&mut buf).await?, 0);
+
+    server.await.unwrap()
+}

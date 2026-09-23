@@ -383,6 +383,31 @@ impl<IO> TlsStream<IO> {
     pub fn into_inner(self) -> (IO, ServerConnection) {
         (self.io, self.session)
     }
+
+    /// Assembles a stream from an `IO` and an established `session`.
+    ///
+    /// This is the inverse of [`Self::into_inner()`]. It allows an established
+    /// connection to be wrapped around a different `IO`, for example to move it
+    /// to another runtime via `TcpStream::into_std()` and `TcpStream::from_std()`,
+    /// or to wrap a connection whose handshake was driven outside of this crate.
+    ///
+    /// `session` must have completed its handshake, because the `TlsStream` is
+    /// unable to drive handshakes (checked with a `debug_assert!`), and it must
+    /// not have been shut down. Plaintext already buffered in `session` remains
+    /// readable through the returned stream.
+    #[inline]
+    pub fn from_parts(io: IO, session: ServerConnection) -> Self {
+        debug_assert!(
+            !session.is_handshaking(),
+            "TlsStream::from_parts() requires a completed handshake"
+        );
+        Self {
+            io,
+            session,
+            state: TlsState::Stream,
+            need_flush: false,
+        }
+    }
 }
 
 impl<IO> IoSession for TlsStream<IO> {
