@@ -1,17 +1,24 @@
 #![cfg(any(feature = "aws_lc_rs", feature = "ring"))]
 
-use std::io::{Cursor, ErrorKind};
+use std::io::{self, Cursor, ErrorKind};
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
+use std::task::{Context, Poll};
 use std::time::Duration;
-use std::{io, thread};
+use std::{future, thread};
 
 use futures_util::future::TryFutureExt;
 use lazy_static::lazy_static;
-use rustls::ClientConfig;
-use rustls::pki_types::ServerName;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy, split};
+use rcgen::CertifiedKey;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls::{ClientConfig, RootCertStore, ServerConfig};
+use tokio::io::{
+    AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream, ReadBuf, copy,
+    split,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::{runtime, time};
@@ -323,6 +330,118 @@ async fn lazy_config_acceptor_alert() {
 #[tokio::test]
 async fn handshake_flush_pending() -> io::Result<()> {
     pass_impl(utils::FlushWrapper::new, false).await
+}
+
+// Regression test for https://github.com/rustls/tokio-rustls/issues/204
+#[tokio::test]
+async fn propagate_connection_aborted() {
+    const HOST: &str = "localhost";
+    const PAYLOAD: &[u8] = b"hello";
+
+    /// Reports `ConnectionAborted` instead of parking, once armed. Buffered bytes
+    /// are delivered first, so the abort occurs strictly after the payload.
+    struct ImitateConnectionAbortedAfterPayload<'a> {
+        delegate: DuplexStream,
+        trigger_connection_aborted: &'a AtomicBool,
+    }
+
+    impl AsyncRead for ImitateConnectionAbortedAfterPayload<'_> {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            match Pin::new(&mut self.delegate).poll_read(cx, buf) {
+                Poll::Pending if self.trigger_connection_aborted.load(Ordering::SeqCst) => {
+                    Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)))
+                }
+                other => other,
+            }
+        }
+    }
+
+    impl AsyncWrite for ImitateConnectionAbortedAfterPayload<'_> {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Pin::new(&mut self.delegate).poll_write(cx, buf)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.delegate).poll_flush(cx)
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.delegate).poll_shutdown(cx)
+        }
+    }
+
+    let CertifiedKey { cert, signing_key } =
+        rcgen::generate_simple_self_signed([HOST.to_owned()]).unwrap();
+    let cert = CertificateDer::from(cert);
+    let signing_key = PrivateKeyDer::from(signing_key);
+
+    let server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.clone()], signing_key)
+        .unwrap();
+
+    let client_config = ClientConfig::builder()
+        .with_root_certificates({
+            let mut roots = RootCertStore::empty();
+            roots.add(cert).unwrap();
+            roots
+        })
+        .with_no_client_auth();
+
+    let (client_io, server_io) = tokio::io::duplex(16 * 1024);
+    let trigger_connection_aborted = AtomicBool::new(false);
+    let (set_payload_written, wait_for_payload_written) = tokio::sync::oneshot::channel();
+
+    let server = tokio::spawn(async move {
+        let mut tls = TlsAcceptor::from(Arc::new(server_config))
+            .accept(server_io)
+            .await
+            .unwrap();
+        tls.write_all(PAYLOAD).await.unwrap();
+        tls.flush().await.unwrap();
+        set_payload_written.send(()).unwrap();
+        future::pending::<()>().await;
+    });
+
+    let mut tls = TlsConnector::from(Arc::new(client_config))
+        .connect(
+            ServerName::try_from(HOST).unwrap(),
+            ImitateConnectionAbortedAfterPayload {
+                delegate: client_io,
+                trigger_connection_aborted: &trigger_connection_aborted,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Arm before the first read so the abort lands inside a single `poll_read`:
+    // the payload record is already buffered and satisfies the first fill, then
+    // the read buffer still has room, so a second fill meets the dead transport.
+    wait_for_payload_written.await.unwrap();
+    trigger_connection_aborted.store(true, Ordering::SeqCst);
+
+    let mut buf = [0u8; 1024];
+    let n = tls.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], PAYLOAD);
+
+    let error = tls.read(&mut buf).await.expect_err(
+        "a ConnectionAborted transport error must surface, not be swallowed into a clean EOF",
+    );
+    assert_eq!(
+        error.kind(),
+        io::ErrorKind::ConnectionAborted,
+        "the original transport error kind should be preserved"
+    );
+
+    server.abort();
 }
 
 // Include `utils` module
