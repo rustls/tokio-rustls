@@ -76,6 +76,7 @@ impl TlsAcceptor {
             io: stream,
             state: TlsState::Stream,
             need_flush: false,
+            buffered_err: None,
         }))
     }
 
@@ -304,6 +305,7 @@ where
             io: self.io,
             state: TlsState::Stream,
             need_flush: false,
+            buffered_err: None,
         }))
     }
 }
@@ -366,6 +368,7 @@ pub struct TlsStream<IO> {
     pub(crate) session: ServerConnection,
     pub(crate) state: TlsState,
     pub(crate) need_flush: bool,
+    pub(crate) buffered_err: Option<io::Error>,
 }
 
 impl<IO> TlsStream<IO> {
@@ -419,6 +422,9 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        if let Some(err) = self.buffered_err.take() {
+            return Poll::Ready(Err(err));
+        };
         let data = ready!(self.as_mut().poll_fill_buf(cx))?;
         let len = data.len().min(buf.remaining());
         if len == 0 {
@@ -431,7 +437,10 @@ where
             let data = match self.as_mut().poll_fill_buf(cx) {
                 Poll::Ready(Ok([])) => break,
                 Poll::Ready(Ok(data)) => data,
-                Poll::Ready(Err(_)) => break, // non-transient error gets re-emitted next poll
+                Poll::Ready(Err(err)) => {
+                    self.buffered_err = Some(err);
+                    break;
+                }
                 Poll::Pending => break,
             };
             let len = Ord::min(data.len(), buf.remaining());
