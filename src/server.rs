@@ -76,7 +76,7 @@ impl TlsAcceptor {
             io: stream,
             state: TlsState::Stream,
             need_flush: false,
-            buffered_err: None,
+            error: None,
         }))
     }
 
@@ -305,7 +305,7 @@ where
             io: self.io,
             state: TlsState::Stream,
             need_flush: false,
-            buffered_err: None,
+            error: None,
         }))
     }
 }
@@ -368,7 +368,8 @@ pub struct TlsStream<IO> {
     pub(crate) session: ServerConnection,
     pub(crate) state: TlsState,
     pub(crate) need_flush: bool,
-    pub(crate) buffered_err: Option<io::Error>,
+    /// Buffered error that occurred during batch reading
+    pub(crate) error: Option<io::Error>,
 }
 
 impl<IO> TlsStream<IO> {
@@ -422,7 +423,7 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if let Some(err) = self.buffered_err.take() {
+        if let Some(err) = self.error.take() {
             return Poll::Ready(Err(err));
         };
         let data = ready!(self.as_mut().poll_fill_buf(cx))?;
@@ -438,7 +439,7 @@ where
                 Poll::Ready(Ok([])) => break,
                 Poll::Ready(Ok(data)) => data,
                 Poll::Ready(Err(err)) => {
-                    self.buffered_err = Some(err);
+                    self.error = Some(err);
                     break;
                 }
                 Poll::Pending => break,
