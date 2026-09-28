@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
-version = "0.26.5"
+version = "0.26.6"
 dependencies = [
  "argh",
  "futures-util",
