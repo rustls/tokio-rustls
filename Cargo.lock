@@ -939,7 +939,6 @@ version = "0.26.6"
 dependencies = [
  "argh",
  "futures-util",
- "lazy_static",
  "rcgen",
  "rustls",
  "tokio",

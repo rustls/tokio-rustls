@@ -3,15 +3,14 @@
 use std::io::{self, Cursor, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
+use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{future, thread};
 
 use futures_util::future::TryFutureExt;
-use lazy_static::lazy_static;
 use rcgen::CertifiedKey;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
@@ -24,52 +23,51 @@ use tokio::sync::oneshot;
 use tokio::{runtime, time};
 use tokio_rustls::{LazyConfigAcceptor, TlsAcceptor, TlsConnector};
 
-lazy_static! {
-    static ref TEST_SERVER: SocketAddr = {
-        let (config, _) = utils::make_configs();
-        let acceptor = TlsAcceptor::from(Arc::new(config));
+#[expect(clippy::incompatible_msrv)]
+static TEST_SERVER: LazyLock<SocketAddr> = LazyLock::new(|| {
+    let (config, _) = utils::make_configs();
+    let acceptor = TlsAcceptor::from(Arc::new(config));
 
-        let (send, recv) = channel();
+    let (send, recv) = channel();
 
-        thread::spawn(move || {
-            let runtime = runtime::Builder::new_current_thread()
-                .enable_io()
-                .build()
-                .unwrap();
-            let runtime = Arc::new(runtime);
-            let runtime2 = runtime.clone();
+    thread::spawn(move || {
+        let runtime = runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .unwrap();
+        let runtime = Arc::new(runtime);
+        let runtime2 = runtime.clone();
 
-            let done = async move {
-                let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-                let listener = TcpListener::bind(&addr).await?;
+        let done = async move {
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+            let listener = TcpListener::bind(&addr).await?;
 
-                send.send(listener.local_addr()?).unwrap();
+            send.send(listener.local_addr()?).unwrap();
 
-                loop {
-                    let (stream, _) = listener.accept().await?;
+            loop {
+                let (stream, _) = listener.accept().await?;
 
-                    let acceptor = acceptor.clone();
-                    let fut = async move {
-                        let stream = acceptor.accept(stream).await?;
+                let acceptor = acceptor.clone();
+                let fut = async move {
+                    let stream = acceptor.accept(stream).await?;
 
-                        let (mut reader, mut writer) = split(stream);
-                        copy(&mut reader, &mut writer).await?;
+                    let (mut reader, mut writer) = split(stream);
+                    copy(&mut reader, &mut writer).await?;
 
-                        Ok(()) as io::Result<()>
-                    }
-                    .unwrap_or_else(|err| eprintln!("server: {:?}", err));
-
-                    runtime2.spawn(fut);
+                    Ok(()) as io::Result<()>
                 }
+                .unwrap_or_else(|err| eprintln!("server: {:?}", err));
+
+                runtime2.spawn(fut);
             }
-            .unwrap_or_else(|err: io::Error| eprintln!("server: {:?}", err));
+        }
+        .unwrap_or_else(|err: io::Error| eprintln!("server: {:?}", err));
 
-            runtime.block_on(done);
-        });
+        runtime.block_on(done);
+    });
 
-        recv.recv().unwrap()
-    };
-}
+    recv.recv().unwrap()
+});
 
 async fn start_client<S: AsyncRead + AsyncWrite + Unpin>(
     addr: SocketAddr,
