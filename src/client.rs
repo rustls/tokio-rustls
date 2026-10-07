@@ -14,7 +14,7 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::common::{IoSession, MidHandshake, Stream, TlsState};
+use crate::common::{IoSession, MAX_READ_PER_POLL, MidHandshake, Stream, TlsState};
 
 /// A wrapper around a `rustls::ClientConfig`, providing an async `connect` method.
 #[derive(Clone)]
@@ -349,7 +349,8 @@ where
         buf.put_slice(&data[..len]);
         self.as_mut().consume(len);
 
-        while buf.remaining() > 0 {
+        let mut read = len;
+        while read < MAX_READ_PER_POLL && buf.remaining() > 0 {
             let data = match self.as_mut().poll_fill_buf(cx) {
                 Poll::Ready(Ok([])) => break,
                 Poll::Ready(Ok(data)) => data,
@@ -362,6 +363,7 @@ where
             let len = Ord::min(data.len(), buf.remaining());
             buf.put_slice(&data[..len]);
             self.as_mut().consume(len);
+            read += len;
         }
         Poll::Ready(Ok(()))
     }
