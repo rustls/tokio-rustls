@@ -444,6 +444,8 @@ async fn propagate_connection_aborted() {
 
 /// Mirrors `MAX_READ_PER_POLL` in `src/common/mod.rs`.
 const MAX_READ_PER_POLL: usize = 128 * 1024;
+/// Largest plaintext a single TLS record can carry.
+const MAX_RECORD_LEN: usize = 16 * 1024;
 
 /// Writes `len` bytes into `writer`, then performs a single `poll_read` on `reader` with a
 /// buffer large enough to hold everything, and returns how many bytes that one call returned.
@@ -483,23 +485,23 @@ async fn poll_read_is_bounded() {
     // Server writes, client reads.
     let n = single_poll_read_len(&mut server, &mut client, PAYLOAD_LEN).await;
     assert!(
-        n > 16 * 1024,
+        n > MAX_RECORD_LEN,
         "expected more than one record, got {n} bytes"
     );
     assert!(
-        n <= MAX_READ_PER_POLL,
-        "expected at most {MAX_READ_PER_POLL} bytes, got {n}"
+        n < MAX_READ_PER_POLL + MAX_RECORD_LEN,
+        "expected the cap to be overshot by less than one record, got {n} bytes"
     );
 
     // Client writes, server reads.
     let n = single_poll_read_len(&mut client, &mut server, PAYLOAD_LEN).await;
     assert!(
-        n > 16 * 1024,
+        n > MAX_RECORD_LEN,
         "expected more than one record, got {n} bytes"
     );
     assert!(
-        n <= MAX_READ_PER_POLL,
-        "expected at most {MAX_READ_PER_POLL} bytes, got {n}"
+        n < MAX_READ_PER_POLL + MAX_RECORD_LEN,
+        "expected the cap to be overshot by less than one record, got {n} bytes"
     );
 }
 

@@ -447,7 +447,7 @@ where
                 }
                 Poll::Pending => break,
             };
-            let len = Ord::min(data.len(), buf.remaining()).min(MAX_READ_PER_POLL - read);
+            let len = Ord::min(data.len(), buf.remaining());
             buf.put_slice(&data[..len]);
             self.as_mut().consume(len);
             read += len;
