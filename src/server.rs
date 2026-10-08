@@ -7,12 +7,16 @@ use std::os::windows::io::{AsRawSocket, RawSocket};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use rustls::server::AcceptedAlert;
 use rustls::{ServerConfig, ServerConnection};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::common::{IoSession, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter, TlsState};
+use crate::common::{
+    IoSession, MAX_READ_DURATION_PER_POLL, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter,
+    TlsState,
+};
 
 /// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
 #[derive(Clone)]
@@ -426,6 +430,7 @@ where
         if let Some(err) = self.error.take() {
             return Poll::Ready(Err(err));
         };
+        let start = Instant::now();
         let data = ready!(self.as_mut().poll_fill_buf(cx))?;
         let len = data.len().min(buf.remaining());
         if len == 0 {
@@ -434,7 +439,7 @@ where
         buf.put_slice(&data[..len]);
         self.as_mut().consume(len);
 
-        while buf.remaining() > 0 {
+        while buf.remaining() > 0 && start.elapsed() < MAX_READ_DURATION_PER_POLL {
             let data = match self.as_mut().poll_fill_buf(cx) {
                 Poll::Ready(Ok([])) => break,
                 Poll::Ready(Ok(data)) => data,
