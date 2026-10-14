@@ -20,10 +20,11 @@ use argh::FromArgs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Instant, timeout, timeout_at};
-use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::rustls::crypto::aws_lc_rs::default_provider;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::server::Acceptor;
+use tokio_rustls::rustls::{DEFAULT_VERSIONS, ServerConfig};
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::{LazyConfigAcceptor, TlsAcceptor};
 
@@ -42,7 +43,9 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     let shutdown_timeout = Duration::from_secs(options.shutdown_timeout);
 
     let config = Arc::new(
-        ServerConfig::builder()
+        ServerConfig::builder_with_provider(Arc::new(default_provider()))
+            .with_protocol_versions(DEFAULT_VERSIONS)
+            .unwrap()
             .with_no_client_auth()
             .with_single_cert(
                 CertificateDer::pem_file_iter(&options.cert)?.collect::<Result<_, _>>()?,

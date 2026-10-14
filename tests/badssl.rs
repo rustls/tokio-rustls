@@ -1,15 +1,16 @@
-#![cfg(all(any(feature = "aws_lc_rs", feature = "ring"), feature = "tls12"))]
+#![cfg(feature = "tls12")]
 
 use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
-use rustls::ClientConfig;
-use rustls::pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
+use tokio_rustls::rustls::crypto::aws_lc_rs::default_provider;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{ClientConfig, DEFAULT_VERSIONS};
 
 async fn get(
     config: Arc<ClientConfig>,
@@ -83,7 +84,9 @@ async fn test_modern_vectored() -> io::Result<()> {
 async fn test_modern_impl(vectored: bool) -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = rustls::ClientConfig::builder()
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(default_provider()))
+        .with_protocol_versions(DEFAULT_VERSIONS)
+        .unwrap()
         .with_root_certificates(root_store)
         .with_no_client_auth();
     let config = Arc::new(config);

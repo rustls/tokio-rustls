@@ -24,9 +24,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, stdout as tokio_stdout};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::crypto::aws_lc_rs::default_provider;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::{ClientConfig, DEFAULT_VERSIONS, RootCertStore};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
@@ -49,7 +50,9 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
     }
 
     let connector = TlsConnector::from(Arc::new(
-        ClientConfig::builder()
+        ClientConfig::builder_with_provider(Arc::new(default_provider()))
+            .with_protocol_versions(DEFAULT_VERSIONS)
+            .unwrap()
             .with_root_certificates(root_cert_store)
             .with_no_client_auth(),
     ));

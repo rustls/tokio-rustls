@@ -15,14 +15,17 @@ Asynchronous TLS/SSL streams for [Tokio](https://tokio.rs/) using
 use rustls_pki_types::ServerName;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::crypto::aws_lc_rs::default_provider;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore, DEFAULT_VERSIONS};
 use tokio_rustls::TlsConnector;
 
 // ...
 
 let mut root_cert_store = RootCertStore::empty();
 root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-let config = ClientConfig::builder()
+let config = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+    .with_protocol_versions(DEFAULT_VERSIONS)
+    .unwrap()
     .with_root_certificates(root_cert_store)
     .with_no_client_auth();
 let connector = TlsConnector::from(Arc::new(config));

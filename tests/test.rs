@@ -1,5 +1,3 @@
-#![cfg(any(feature = "aws_lc_rs", feature = "ring"))]
-
 use std::io::{self, Cursor, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -12,8 +10,9 @@ use std::{future, thread};
 
 use futures_util::future::TryFutureExt;
 use rcgen::CertifiedKey;
+use rustls::crypto::aws_lc_rs::default_provider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-use rustls::{ClientConfig, RootCertStore, ServerConfig};
+use rustls::{ClientConfig, DEFAULT_VERSIONS, RootCertStore, ServerConfig};
 use tokio::io::{
     AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream, ReadBuf, copy,
     split,
@@ -381,12 +380,17 @@ async fn propagate_connection_aborted() {
     let cert = CertificateDer::from(cert);
     let signing_key = PrivateKeyDer::from(signing_key);
 
-    let server_config = ServerConfig::builder()
+    let provider = Arc::new(default_provider());
+    let server_config = ServerConfig::builder_with_provider(provider.clone())
+        .with_protocol_versions(DEFAULT_VERSIONS)
+        .unwrap()
         .with_no_client_auth()
         .with_single_cert(vec![cert.clone()], signing_key)
         .unwrap();
 
-    let client_config = ClientConfig::builder()
+    let client_config = ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(DEFAULT_VERSIONS)
+        .unwrap()
         .with_root_certificates({
             let mut roots = RootCertStore::empty();
             roots.add(cert).unwrap();
