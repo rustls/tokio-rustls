@@ -2,8 +2,10 @@ mod utils {
     use std::collections::VecDeque;
     use std::io::IoSlice;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::task::{Context, Poll};
 
+    use rustls::crypto::aws_lc_rs::default_provider;
     use rustls::pki_types::pem::PemObject;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     use rustls::{ClientConfig, RootCertStore, ServerConfig};
@@ -24,7 +26,9 @@ mod utils {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let key = PrivateKeyDer::from_pem_slice(EE_KEY.as_bytes()).unwrap();
-        let sconfig = ServerConfig::builder()
+        let sconfig = ServerConfig::builder_with_provider(Arc::new(default_provider()))
+            .with_protocol_versions(&rustls::ALL_VERSIONS)
+            .unwrap()
             .with_no_client_auth()
             .with_single_cert(cert, key)
             .unwrap();
@@ -34,7 +38,9 @@ mod utils {
             client_root_cert_store.add(root.unwrap()).unwrap();
         }
 
-        let cconfig = ClientConfig::builder()
+        let cconfig = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+            .with_protocol_versions(&rustls::ALL_VERSIONS)
+            .unwrap()
             .with_root_certificates(client_root_cert_store)
             .with_no_client_auth();
 
