@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::io::{self, BufRead as _};
+use std::io;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -8,10 +8,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use rustls::{ServerConfig, ServerConnection};
+use rustls::{Connection, ServerConfig, ServerSide, Tcp};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::common::{IoSession, MidHandshake, Stream, TlsState};
+use crate::{Buffered, TlsStreamParts};
 
 /// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
 #[derive(Clone)]
@@ -55,9 +56,9 @@ impl TlsAcceptor {
     pub fn accept_with<IO, F>(&self, stream: IO, f: F) -> Accept<IO>
     where
         IO: AsyncRead + AsyncWrite + Unpin,
-        F: FnOnce(&mut ServerConnection),
+        F: FnOnce(&mut Connection<ServerSide, Tcp>),
     {
-        let mut session = match ServerConnection::new(self.inner.clone()) {
+        let mut session = match Connection::new(self.inner.clone()) {
             Ok(session) => session,
             Err(error) => {
                 return Accept(MidHandshake::Error {
@@ -71,8 +72,8 @@ impl TlsAcceptor {
         f(&mut session);
 
         Accept(MidHandshake::Handshaking(TlsStream {
-            session,
             io: stream,
+            buffered: Buffered::new(session, Vec::with_capacity(16_384)),
             state: TlsState::Stream,
             need_flush: false,
             error: None,
@@ -140,7 +141,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> Future for FallibleAccept<IO> {
 #[derive(Debug)]
 pub struct TlsStream<IO> {
     pub(crate) io: IO,
-    pub(crate) session: ServerConnection,
+    pub(crate) buffered: Buffered<ServerSide>,
     pub(crate) state: TlsState,
     pub(crate) need_flush: bool,
     /// Buffered error that occurred during batch reading
@@ -149,40 +150,68 @@ pub struct TlsStream<IO> {
 
 impl<IO> TlsStream<IO> {
     #[inline]
-    pub fn get_ref(&self) -> (&IO, &ServerConnection) {
-        (&self.io, &self.session)
+    pub fn get_ref(&self) -> (&IO, &Connection<ServerSide, Tcp>) {
+        (&self.io, &self.buffered.conn)
     }
 
     #[inline]
-    pub fn get_mut(&mut self) -> (&mut IO, &mut ServerConnection) {
-        (&mut self.io, &mut self.session)
+    pub fn get_mut(&mut self) -> (&mut IO, &mut Connection<ServerSide, Tcp>) {
+        (&mut self.io, &mut self.buffered.conn)
     }
 
+    /// Consumes the `TlsStream`, returning its underlying parts.
     #[inline]
-    pub fn into_inner(self) -> (IO, ServerConnection) {
-        (self.io, self.session)
+    pub fn into_inner(self) -> TlsStreamParts<IO, ServerSide> {
+        let mut input = self.buffered.input;
+        input.truncate(self.buffered.used);
+
+        TlsStreamParts {
+            io: self.io,
+            conn: self.buffered.conn,
+            input,
+            tls: self.buffered.tls,
+            received_plaintext: self.buffered.received_plaintext,
+        }
     }
 
-    /// Assembles a stream from an `IO` and an established `session`.
+    /// Assembles a stream from an `IO`, the connection and its buffers.
     ///
     /// This is the inverse of [`Self::into_inner()`]. It allows an established
     /// connection to be wrapped around a different `IO`, for example to move it
     /// to another runtime via `TcpStream::into_std()` and `TcpStream::from_std()`,
     /// or to wrap a connection whose handshake was driven outside of this crate.
     ///
-    /// `session` must have completed its handshake, because the `TlsStream` is
+    /// The connection must have completed its handshake, because the `TlsStream` is
     /// unable to drive handshakes (checked with a `debug_assert!`), and it must
-    /// not have been shut down. Plaintext already buffered in `session` remains
-    /// readable through the returned stream.
+    /// not have been shut down.
     #[inline]
-    pub fn from_parts(io: IO, session: ServerConnection) -> Self {
+    pub fn from_parts(parts: TlsStreamParts<IO, ServerSide>) -> Self {
+        let TlsStreamParts {
+            io,
+            conn,
+            input,
+            tls,
+            received_plaintext,
+        } = parts;
+
         debug_assert!(
-            !session.is_handshaking(),
+            !conn.is_handshaking(),
             "TlsStream::from_parts() requires a completed handshake"
         );
+
+        let buffered = Buffered {
+            conn,
+            used: input.len(),
+            input,
+            tls,
+            received_plaintext,
+            received_close_notify: false,
+            has_seen_eof: false,
+        };
+
         Self {
             io,
-            session,
+            buffered,
             state: TlsState::Stream,
             need_flush: false,
             error: None,
@@ -192,7 +221,7 @@ impl<IO> TlsStream<IO> {
 
 impl<IO> IoSession for TlsStream<IO> {
     type Io = IO;
-    type Session = ServerConnection;
+    type Side = ServerSide;
 
     #[inline]
     fn skip_handshake(&self) -> bool {
@@ -200,11 +229,18 @@ impl<IO> IoSession for TlsStream<IO> {
     }
 
     #[inline]
-    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session, &mut bool) {
+    fn get_mut(
+        &mut self,
+    ) -> (
+        &mut TlsState,
+        &mut Self::Io,
+        &mut Buffered<ServerSide>,
+        &mut bool,
+    ) {
         (
             &mut self.state,
             &mut self.io,
-            &mut self.session,
+            &mut self.buffered,
             &mut self.need_flush,
         )
     }
@@ -261,8 +297,7 @@ where
         match self.state {
             TlsState::Stream | TlsState::WriteShutdown => {
                 let this = self.get_mut();
-                let stream =
-                    Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+                let stream = Stream::new(&mut this.io, &mut this.buffered);
 
                 match stream.poll_fill_buf(cx) {
                     Poll::Ready(Ok(buf)) => {
@@ -286,7 +321,8 @@ where
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        self.session.reader().consume(amt);
+        let Self { io, buffered, .. } = &mut *self;
+        Pin::new(&mut Stream::new(io, buffered)).consume(amt);
     }
 }
 
@@ -302,8 +338,7 @@ where
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(&mut this.io, &mut this.buffered);
         stream.as_mut_pin().poll_write(cx, buf)
     }
 
@@ -315,8 +350,7 @@ where
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(&mut this.io, &mut this.buffered);
         stream.as_mut_pin().poll_write_vectored(cx, bufs)
     }
 
@@ -327,20 +361,21 @@ where
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(&mut this.io, &mut this.buffered);
         stream.as_mut_pin().poll_flush(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         if self.state.writeable() {
-            self.session.send_close_notify();
+            let Buffered { conn, tls, .. } = &mut self.buffered;
+            if let Err(err) = conn.send_close_notify(tls) {
+                return Poll::Ready(Err(io::Error::other(err)));
+            }
             self.state.shutdown_write();
         }
 
         let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(&mut this.io, &mut this.buffered);
         stream.as_mut_pin().poll_shutdown(cx)
     }
 }

@@ -5,10 +5,11 @@ mod utils {
     use std::sync::Arc;
     use std::task::{Context, Poll};
 
-    use rustls::crypto::aws_lc_rs::default_provider;
+    use rustls::crypto::{Credentials, Identity, SingleCredential};
     use rustls::pki_types::pem::PemObject;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     use rustls::{ClientConfig, RootCertStore, ServerConfig};
+    use rustls_aws_lc_rs::DEFAULT_PROVIDER;
     use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 
     #[allow(dead_code)]
@@ -26,11 +27,17 @@ mod utils {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let key = PrivateKeyDer::from_pem_slice(EE_KEY.as_bytes()).unwrap();
-        let sconfig = ServerConfig::builder_with_provider(Arc::new(default_provider()))
-            .with_protocol_versions(&rustls::ALL_VERSIONS)
-            .unwrap()
+        let provider = Arc::new(DEFAULT_PROVIDER);
+        let sconfig = ServerConfig::builder(provider.clone())
             .with_no_client_auth()
-            .with_single_cert(cert, key)
+            .with_server_credential_resolver(Arc::from(SingleCredential::from(
+                Credentials::from_der(
+                    Arc::from(Identity::from_cert_chain(cert).unwrap()),
+                    key,
+                    &provider,
+                )
+                .unwrap(),
+            )))
             .unwrap();
 
         let mut client_root_cert_store = RootCertStore::empty();
@@ -38,11 +45,10 @@ mod utils {
             client_root_cert_store.add(root.unwrap()).unwrap();
         }
 
-        let cconfig = ClientConfig::builder_with_provider(Arc::new(default_provider()))
-            .with_protocol_versions(&rustls::ALL_VERSIONS)
-            .unwrap()
+        let cconfig = ClientConfig::builder(provider)
             .with_root_certificates(client_root_cert_store)
-            .with_no_client_auth();
+            .with_no_client_auth()
+            .unwrap();
 
         (sconfig, cconfig)
     }

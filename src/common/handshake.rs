@@ -1,21 +1,27 @@
 use std::future::Future;
-use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{io, mem};
 
-use rustls::server::AcceptedAlert;
-use rustls::{ConnectionCommon, SideData};
+use rustls::SideData;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::common::{Stream, SyncWriteAdapter, TlsState};
+use crate::Buffered;
+use crate::common::{Stream, TlsState};
 
 pub(crate) trait IoSession {
     type Io;
-    type Session;
+    type Side: SideData;
 
     fn skip_handshake(&self) -> bool;
-    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session, &mut bool);
+    fn get_mut(
+        &mut self,
+    ) -> (
+        &mut TlsState,
+        &mut Self::Io,
+        &mut Buffered<Self::Side>,
+        &mut bool,
+    );
     fn into_io(self) -> Self::Io;
 }
 
@@ -24,7 +30,7 @@ pub(crate) enum MidHandshake<IS: IoSession> {
     End,
     SendAlert {
         io: IS::Io,
-        alert: AcceptedAlert,
+        tls: Vec<u8>,
         error: io::Error,
     },
     Error {
@@ -33,12 +39,10 @@ pub(crate) enum MidHandshake<IS: IoSession> {
     },
 }
 
-impl<IS, SD> Future for MidHandshake<IS>
+impl<IS> Future for MidHandshake<IS>
 where
     IS: IoSession + Unpin,
     IS::Io: AsyncRead + AsyncWrite + Unpin,
-    IS::Session: DerefMut + Deref<Target = ConnectionCommon<SD>> + Unpin,
-    SD: SideData,
 {
     type Output = Result<IS, (io::Error, IS::Io)>;
 
@@ -49,16 +53,23 @@ where
             Self::Handshaking(stream) => stream,
             Self::SendAlert {
                 mut io,
-                mut alert,
+                mut tls,
                 error,
             } => loop {
-                match alert.write(&mut SyncWriteAdapter { io: &mut io, cx }) {
+                match ready!(Pin::new(&mut io).poll_write(cx, &tls)) {
+                    Ok(0) => return Poll::Ready(Err((error, io))),
+                    Ok(written) => {
+                        tls.copy_within(written.., 0);
+                        tls.truncate(tls.len() - written);
+                        if tls.is_empty() {
+                            return Poll::Ready(Err((error, io)));
+                        }
+                    }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        *this = Self::SendAlert { io, error, alert };
+                        *this = Self::SendAlert { io, tls, error };
                         return Poll::Pending;
                     }
-                    Err(_) | Ok(0) => return Poll::Ready(Err((error, io))),
-                    Ok(_) => {}
+                    Err(_) => return Poll::Ready(Err((error, io))),
                 };
             },
             // Starting the handshake returned an error; fail the future immediately.
@@ -67,10 +78,8 @@ where
         };
 
         if !stream.skip_handshake() {
-            let (state, io, session, need_flush) = stream.get_mut();
-            let mut tls_stream = Stream::new(io, session)
-                .set_eof(!state.readable())
-                .set_need_flush(*need_flush);
+            let (_, io, buffered, need_flush) = stream.get_mut();
+            let mut tls_stream = Stream::new(io, buffered).set_need_flush(*need_flush);
 
             macro_rules! try_poll {
                 ( $e:expr ) => {
@@ -86,7 +95,7 @@ where
                 };
             }
 
-            while tls_stream.session.is_handshaking() {
+            while tls_stream.buffered.conn.is_handshaking() {
                 try_poll!(tls_stream.handshake(cx));
             }
 

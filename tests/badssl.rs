@@ -1,17 +1,17 @@
-#![cfg(feature = "tls12")]
-
+use std::borrow::Cow;
 use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
+use rustls::ClientConfig;
+use rustls::crypto::kx::SupportedKxGroup;
+use rustls_aws_lc_rs::{DEFAULT_PROVIDER, kx_group};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::crypto::CryptoProvider;
-use tokio_rustls::rustls::crypto::aws_lc_rs::{default_provider, kx_group};
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, DEFAULT_VERSIONS};
 
 async fn get(
     config: Arc<ClientConfig>,
@@ -48,11 +48,16 @@ async fn test_tls12_vectored() -> io::Result<()> {
 async fn test_tls12_impl(vectored: bool) -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = rustls::ClientConfig::builder_with_provider(provider())
-        .with_protocol_versions(&[&rustls::version::TLS12])
-        .unwrap()
+
+    let provider = Arc::new(CryptoProvider {
+        tls13_cipher_suites: Cow::Borrowed(&[]),
+        ..DEFAULT_PROVIDER
+    });
+
+    let config = ClientConfig::builder(provider)
         .with_root_certificates(root_store)
-        .with_no_client_auth();
+        .with_no_client_auth()
+        .unwrap();
 
     let config = Arc::new(config);
     let domain = "tls-v1-2.badssl.com";
@@ -87,11 +92,10 @@ async fn test_modern_vectored() -> io::Result<()> {
 async fn test_modern_impl(vectored: bool) -> io::Result<()> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = rustls::ClientConfig::builder_with_provider(provider())
-        .with_protocol_versions(DEFAULT_VERSIONS)
-        .unwrap()
+    let config = rustls::ClientConfig::builder(provider())
         .with_root_certificates(root_store)
-        .with_no_client_auth();
+        .with_no_client_auth()
+        .unwrap();
     let config = Arc::new(config);
     let domain = "mozilla-modern.badssl.com";
 
@@ -108,10 +112,13 @@ async fn test_modern_impl(vectored: bool) -> io::Result<()> {
 /// The default aws-lc-rs provider without post-quantum key exchange
 fn provider() -> Arc<CryptoProvider> {
     Arc::new(CryptoProvider {
-        kx_groups: vec![kx_group::X25519, kx_group::SECP256R1, kx_group::SECP384R1],
-        ..default_provider()
+        kx_groups: Cow::Borrowed(CLASSIC_KX),
+        ..DEFAULT_PROVIDER
     })
 }
+
+static CLASSIC_KX: &[&dyn SupportedKxGroup] =
+    &[kx_group::X25519, kx_group::SECP256R1, kx_group::SECP384R1];
 
 // Include `utils` module
 include!("utils.rs");

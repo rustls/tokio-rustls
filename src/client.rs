@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::io::{self, BufRead as _};
+use std::io;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -10,11 +10,15 @@ use std::sync::Arc;
 use std::task::Waker;
 use std::task::{Context, Poll};
 
+#[cfg(feature = "early-data")]
+use rustls::crypto::cipher::OutboundPlain;
+use rustls::enums::ApplicationProtocol;
 use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection};
+use rustls::{ClientConfig, ClientSide, Connection, Tcp};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::common::{IoSession, MidHandshake, Stream, TlsState};
+use crate::{Buffered, TlsStreamParts};
 
 /// A wrapper around a `rustls::ClientConfig`, providing an async `connect` method.
 #[derive(Clone)]
@@ -62,7 +66,7 @@ impl TlsConnector {
     pub fn connect_with<IO, F>(&self, domain: ServerName<'static>, stream: IO, f: F) -> Connect<IO>
     where
         IO: AsyncRead + AsyncWrite + Unpin,
-        F: FnOnce(&mut ClientConnection),
+        F: FnOnce(&mut Connection<ClientSide, Tcp>),
     {
         self.connect_impl(domain, stream, None, f)
     }
@@ -71,15 +75,20 @@ impl TlsConnector {
         &self,
         domain: ServerName<'static>,
         stream: IO,
-        alpn_protocols: Option<Vec<Vec<u8>>>,
+        alpn_protocols: Option<Vec<ApplicationProtocol<'static>>>,
         f: F,
     ) -> Connect<IO>
     where
         IO: AsyncRead + AsyncWrite + Unpin,
-        F: FnOnce(&mut ClientConnection),
+        F: FnOnce(&mut Connection<ClientSide, Tcp>),
     {
-        let alpn = alpn_protocols.unwrap_or_else(|| self.inner.alpn_protocols.clone());
-        let mut session = match ClientConnection::new_with_alpn(self.inner.clone(), domain, alpn) {
+        let mut builder = self.inner.connect(domain);
+        if let Some(alpn_protocols) = alpn_protocols {
+            builder = builder.with_alpn(alpn_protocols);
+        }
+
+        let mut tls = Vec::with_capacity(16_384);
+        let mut conn = match builder.build(&mut tls) {
             Ok(session) => session,
             Err(error) => {
                 return Connect(MidHandshake::Error {
@@ -90,7 +99,7 @@ impl TlsConnector {
                 });
             }
         };
-        f(&mut session);
+        f(&mut conn);
 
         Connect(MidHandshake::Handshaking(TlsStream {
             io: stream,
@@ -99,7 +108,7 @@ impl TlsConnector {
             state: TlsState::Stream,
 
             #[cfg(feature = "early-data")]
-            state: if self.early_data && session.early_data().is_some() {
+            state: if self.early_data && conn.early_data().is_some() {
                 TlsState::EarlyData(0, Vec::new())
             } else {
                 TlsState::Stream
@@ -111,11 +120,14 @@ impl TlsConnector {
             #[cfg(feature = "early-data")]
             early_waker: None,
 
-            session,
+            buffered: Buffered::new(conn, tls),
         }))
     }
 
-    pub fn with_alpn(&self, alpn_protocols: Vec<Vec<u8>>) -> TlsConnectorWithAlpn<'_> {
+    pub fn with_alpn(
+        &self,
+        alpn_protocols: Vec<ApplicationProtocol<'static>>,
+    ) -> TlsConnectorWithAlpn<'_> {
         TlsConnectorWithAlpn {
             inner: self,
             alpn_protocols,
@@ -140,7 +152,7 @@ impl From<Arc<ClientConfig>> for TlsConnector {
 
 pub struct TlsConnectorWithAlpn<'c> {
     inner: &'c TlsConnector,
-    alpn_protocols: Vec<Vec<u8>>,
+    alpn_protocols: Vec<ApplicationProtocol<'static>>,
 }
 
 impl TlsConnectorWithAlpn<'_> {
@@ -172,7 +184,7 @@ impl TlsConnectorWithAlpn<'_> {
     pub fn connect_with<IO, F>(self, domain: ServerName<'static>, stream: IO, f: F) -> Connect<IO>
     where
         IO: AsyncRead + AsyncWrite + Unpin,
-        F: FnOnce(&mut ClientConnection),
+        F: FnOnce(&mut Connection<ClientSide, Tcp>),
     {
         self.inner
             .connect_impl(domain, stream, Some(self.alpn_protocols), f)
@@ -234,7 +246,7 @@ pub struct FallibleConnect<IO>(MidHandshake<TlsStream<IO>>);
 #[derive(Debug)]
 pub struct TlsStream<IO> {
     pub(crate) io: IO,
-    pub(crate) session: ClientConnection,
+    pub(crate) buffered: Buffered<ClientSide>,
     pub(crate) state: TlsState,
     pub(crate) need_flush: bool,
     /// Buffered error that occurred during batch reading
@@ -246,40 +258,68 @@ pub struct TlsStream<IO> {
 
 impl<IO> TlsStream<IO> {
     #[inline]
-    pub fn get_ref(&self) -> (&IO, &ClientConnection) {
-        (&self.io, &self.session)
+    pub fn get_ref(&self) -> (&IO, &Connection<ClientSide, Tcp>) {
+        (&self.io, &self.buffered.conn)
     }
 
     #[inline]
-    pub fn get_mut(&mut self) -> (&mut IO, &mut ClientConnection) {
-        (&mut self.io, &mut self.session)
+    pub fn get_mut(&mut self) -> (&mut IO, &mut Connection<ClientSide, Tcp>) {
+        (&mut self.io, &mut self.buffered.conn)
     }
 
+    /// Consumes the `TlsStream`, returning its underlying parts.
     #[inline]
-    pub fn into_inner(self) -> (IO, ClientConnection) {
-        (self.io, self.session)
+    pub fn into_inner(self) -> TlsStreamParts<IO, ClientSide> {
+        let mut input = self.buffered.input;
+        input.truncate(self.buffered.used);
+
+        TlsStreamParts {
+            io: self.io,
+            conn: self.buffered.conn,
+            input,
+            tls: self.buffered.tls,
+            received_plaintext: self.buffered.received_plaintext,
+        }
     }
 
-    /// Assembles a stream from an `IO` and an established `session`.
+    /// Assembles a stream from an `IO`, the connection and its buffers.
     ///
     /// This is the inverse of [`Self::into_inner()`]. It allows an established
     /// connection to be wrapped around a different `IO`, for example to move it
     /// to another runtime via `TcpStream::into_std()` and `TcpStream::from_std()`,
     /// or to wrap a connection whose handshake was driven outside of this crate.
     ///
-    /// `session` must have completed its handshake, because the `TlsStream` is
+    /// The connection must have completed its handshake, because the `TlsStream` is
     /// unable to drive handshakes (checked with a `debug_assert!`), and it must
-    /// not have been shut down. Plaintext already buffered in `session` remains
-    /// readable through the returned stream.
+    /// not have been shut down.
     #[inline]
-    pub fn from_parts(io: IO, session: ClientConnection) -> Self {
+    pub fn from_parts(parts: TlsStreamParts<IO, ClientSide>) -> Self {
+        let TlsStreamParts {
+            io,
+            conn,
+            input,
+            tls,
+            received_plaintext,
+        } = parts;
+
         debug_assert!(
-            !session.is_handshaking(),
+            !conn.is_handshaking(),
             "TlsStream::from_parts() requires a completed handshake"
         );
+
+        let buffered = Buffered {
+            conn,
+            used: input.len(),
+            input,
+            tls,
+            received_plaintext,
+            received_close_notify: false,
+            has_seen_eof: false,
+        };
+
         Self {
             io,
-            session,
+            buffered,
             state: TlsState::Stream,
             need_flush: false,
             error: None,
@@ -311,7 +351,7 @@ where
 
 impl<IO> IoSession for TlsStream<IO> {
     type Io = IO;
-    type Session = ClientConnection;
+    type Side = ClientSide;
 
     #[inline]
     fn skip_handshake(&self) -> bool {
@@ -319,11 +359,18 @@ impl<IO> IoSession for TlsStream<IO> {
     }
 
     #[inline]
-    fn get_mut(&mut self) -> (&mut TlsState, &mut Self::Io, &mut Self::Session, &mut bool) {
+    fn get_mut(
+        &mut self,
+    ) -> (
+        &mut TlsState,
+        &mut Self::Io,
+        &mut Buffered<ClientSide>,
+        &mut bool,
+    ) {
         (
             &mut self.state,
             &mut self.io,
-            &mut self.session,
+            &mut self.buffered,
             &mut self.need_flush,
         )
     }
@@ -408,8 +455,7 @@ where
             }
             TlsState::Stream | TlsState::WriteShutdown => {
                 let this = self.get_mut();
-                let stream =
-                    Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+                let stream = Stream::new(&mut this.io, &mut this.buffered);
 
                 match stream.poll_fill_buf(cx) {
                     Poll::Ready(Ok(buf)) => {
@@ -431,7 +477,8 @@ where
     }
 
     fn consume(mut self: Pin<&mut Self>, amt: usize) {
-        self.session.reader().consume(amt);
+        let Self { io, buffered, .. } = &mut *self;
+        Pin::new(&mut Stream::new(io, buffered)).consume(amt);
     }
 }
 
@@ -447,9 +494,8 @@ where
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream = Stream::new(&mut this.io, &mut this.session)
-            .set_eof(!this.state.readable())
-            .set_need_flush(this.need_flush);
+        let mut stream =
+            Stream::new(&mut this.io, &mut this.buffered).set_need_flush(this.need_flush);
 
         #[cfg(feature = "early-data")]
         {
@@ -482,9 +528,8 @@ where
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let mut stream = Stream::new(&mut this.io, &mut this.session)
-            .set_eof(!this.state.readable())
-            .set_need_flush(this.need_flush);
+        let mut stream =
+            Stream::new(&mut this.io, &mut this.buffered).set_need_flush(this.need_flush);
 
         #[cfg(feature = "early-data")]
         {
@@ -515,9 +560,8 @@ where
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let mut stream = Stream::new(&mut this.io, &mut this.session)
-            .set_eof(!this.state.readable())
-            .set_need_flush(this.need_flush);
+        let mut stream =
+            Stream::new(&mut this.io, &mut this.buffered).set_need_flush(this.need_flush);
 
         #[cfg(feature = "early-data")]
         {
@@ -546,14 +590,15 @@ where
             }
         }
 
-        if self.state.writeable() {
-            self.session.send_close_notify();
-            self.state.shutdown_write();
+        let this = self.get_mut();
+        if this.state.writeable() {
+            if let Err(err) = this.buffered.conn.send_close_notify(&mut this.buffered.tls) {
+                return Poll::Ready(Err(io::Error::other(err)));
+            }
+            this.state.shutdown_write();
         }
 
-        let this = self.get_mut();
-        let mut stream =
-            Stream::new(&mut this.io, &mut this.session).set_eof(!this.state.readable());
+        let mut stream = Stream::new(&mut this.io, &mut this.buffered);
         stream.as_mut_pin().poll_shutdown(cx)
     }
 }
@@ -561,7 +606,7 @@ where
 #[cfg(feature = "early-data")]
 fn poll_handle_early_data<IO>(
     state: &mut TlsState,
-    stream: &mut Stream<IO, ClientConnection>,
+    stream: &mut Stream<IO, ClientSide>,
     early_waker: &mut Option<Waker>,
     cx: &mut Context<'_>,
     bufs: &[io::IoSlice<'_>],
@@ -570,43 +615,52 @@ where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
     if let TlsState::EarlyData(pos, data) = state {
-        use std::io::Write;
-
         // write early data
-        if let Some(mut early_data) = stream.session.early_data() {
-            let mut written = 0;
-
+        if let Some(mut early_data) = stream.buffered.conn.early_data() {
+            let (mut chunks, mut non_empty, mut end) =
+                (Vec::<&[u8]>::with_capacity(bufs.len()), false, 0);
             for buf in bufs {
                 if buf.is_empty() {
                     continue;
                 }
 
-                let len = match early_data.write(buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(err) => return Poll::Ready(Err(err)),
-                };
-
-                written += len;
-                data.extend_from_slice(&buf[..len]);
-
-                if len < buf.len() {
-                    break;
-                }
+                chunks.push(&*buf);
+                non_empty |= true;
+                end += buf.len();
             }
 
-            if written != 0 {
-                return Poll::Ready(Ok(written));
+            if non_empty {
+                let plaintext = OutboundPlain::Multiple {
+                    chunks: &chunks,
+                    start: 0,
+                    end,
+                };
+
+                let written = match early_data.write(plaintext, &mut stream.buffered.tls) {
+                    Ok(written) => written,
+                    Err(err) => return Poll::Ready(Err(io::Error::other(err))),
+                };
+
+                if written != 0 {
+                    // Keep the early data around to resend it if the server rejects it
+                    OutboundPlain::Multiple {
+                        chunks: &chunks,
+                        start: 0,
+                        end: written,
+                    }
+                    .copy_to_vec(data);
+                    return Poll::Ready(Ok(written));
+                }
             }
         }
 
         // complete handshake
-        while stream.session.is_handshaking() {
+        while stream.buffered.conn.is_handshaking() {
             ready!(stream.handshake(cx))?;
         }
 
         // write early data (fallback)
-        if !stream.session.is_early_data_accepted() {
+        if !stream.buffered.conn.side().is_early_data_accepted() {
             while *pos < data.len() {
                 let len = ready!(stream.as_mut_pin().poll_write(cx, &data[*pos..]))?;
                 *pos += len;

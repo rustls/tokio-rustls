@@ -47,7 +47,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 pub use rustls;
-use rustls::CommonState;
+use rustls::{CommonState, Connection, SideData, SliceInput, Tcp};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 macro_rules! ready {
@@ -87,20 +87,6 @@ impl<T> TlsStream<T> {
             Server(io) => {
                 let (io, session) = io.get_ref();
                 (io, session)
-            }
-        }
-    }
-
-    pub fn get_mut(&mut self) -> (&mut T, &mut CommonState) {
-        use TlsStream::*;
-        match self {
-            Client(io) => {
-                let (io, session) = io.get_mut();
-                (io, &mut *session)
-            }
-            Server(io) => {
-                let (io, session) = io.get_mut();
-                (io, &mut *session)
             }
         }
     }
@@ -227,4 +213,89 @@ where
             Self::Server(x) => Pin::new(x).poll_shutdown(cx),
         }
     }
+}
+
+#[derive(Debug)]
+struct Buffered<Side: SideData> {
+    conn: Connection<Side, Tcp>,
+    /// Zero-initialized buffer for received TLS data, of which the first `used` bytes are filled
+    input: Vec<u8>,
+    used: usize,
+    tls: Vec<u8>,
+    received_plaintext: Vec<u8>,
+    received_close_notify: bool,
+    has_seen_eof: bool,
+}
+
+impl<Side: SideData> Buffered<Side> {
+    fn new(conn: Connection<Side, Tcp>, tls: Vec<u8>) -> Self {
+        Self {
+            conn,
+            input: vec![0; 16_384],
+            used: 0,
+            tls,
+            received_plaintext: Vec::with_capacity(1_024),
+            received_close_notify: false,
+            has_seen_eof: false,
+        }
+    }
+
+    /// Whether more TLS data should be read from the transport
+    ///
+    /// Reading stops while received plaintext is buffered, to apply backpressure to the peer.
+    fn wants_read(&self) -> bool {
+        self.received_plaintext.is_empty() && !self.received_close_notify && !self.has_seen_eof
+    }
+
+    /// Yields the unfilled part of the input buffer, growing it if it is full
+    fn read_buf(&mut self) -> io::Result<ReadBuf<'_>> {
+        if self.used == self.input.len() {
+            if self.used >= MAX_INPUT_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "input buffer full",
+                ));
+            }
+
+            let new_len = Ord::min(self.used + READ_SIZE, MAX_INPUT_SIZE);
+            self.input.resize(new_len, 0);
+        }
+
+        Ok(ReadBuf::new(&mut self.input[self.used..]))
+    }
+
+    /// Processes the filled part of the input buffer, appending plaintext to `received_plaintext`
+    fn process_input(&mut self) -> Result<(), rustls::Error> {
+        let mut input = SliceInput::new(&mut self.input[..self.used]);
+        let result = self
+            .conn
+            .read_tls(&mut input, &mut self.tls)
+            .handle_all(&mut self.received_plaintext);
+
+        let discard = input.into_used();
+        self.input.copy_within(discard..self.used, 0);
+        self.used -= discard;
+
+        self.received_close_notify = result?.peer_has_closed();
+        Ok(())
+    }
+}
+
+/// Minimum number of bytes to make available when growing the input buffer
+const READ_SIZE: usize = 4_096;
+
+/// Limit on the input buffer size, matching rustls' limit on handshake message size
+const MAX_INPUT_SIZE: usize = 0xffff;
+
+/// Limit on buffered outgoing TLS data, beyond which writes are not accepted
+///
+/// The buffer may exceed this by the encryption overhead of the last write.
+const TLS_BUFFER_LIMIT: usize = 64 * 1024;
+
+pub struct TlsStreamParts<IO, Side: SideData> {
+    pub io: IO,
+    pub conn: Connection<Side, Tcp>,
+    pub input: Vec<u8>,
+    pub tls: Vec<u8>,
+    pub received_plaintext: Vec<u8>,
 }

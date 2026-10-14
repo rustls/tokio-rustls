@@ -12,22 +12,21 @@ Asynchronous TLS/SSL streams for [Tokio](https://tokio.rs/) using
 ### Basic Structure of a Client
 
 ```rust
-use rustls_pki_types::ServerName;
 use std::sync::Arc;
+use rustls_aws_lc_rs::DEFAULT_PROVIDER;
 use tokio::net::TcpStream;
-use tokio_rustls::rustls::crypto::aws_lc_rs::default_provider;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore, DEFAULT_VERSIONS};
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 // ...
 
 let mut root_cert_store = RootCertStore::empty();
 root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-let config = ClientConfig::builder_with_provider(Arc::new(default_provider()))
-    .with_protocol_versions(DEFAULT_VERSIONS)
-    .unwrap()
+let config = ClientConfig::builder(Arc::new(DEFAULT_PROVIDER))
     .with_root_certificates(root_cert_store)
-    .with_no_client_auth();
+    .with_no_client_auth()
+    .unwrap();
 let connector = TlsConnector::from(Arc::new(config));
 let dnsname = ServerName::try_from("www.rust-lang.org").unwrap();
 

@@ -9,16 +9,17 @@ use std::{future, thread};
 
 use futures_util::future::TryFutureExt;
 use rcgen::CertifiedKey;
-use rustls::crypto::aws_lc_rs::default_provider;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-use rustls::{ClientConfig, DEFAULT_VERSIONS, RootCertStore, ServerConfig};
+use rustls_aws_lc_rs::DEFAULT_PROVIDER;
 use tokio::io::{
     AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream, ReadBuf, copy,
     split,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime;
-use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_rustls::rustls::crypto::{Credentials, Identity, SingleCredential};
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use tokio_rustls::rustls::{ClientConfig, RootCertStore, ServerConfig};
+use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStreamParts};
 
 #[expect(clippy::incompatible_msrv)]
 static TEST_SERVER: LazyLock<SocketAddr> = LazyLock::new(|| {
@@ -145,11 +146,6 @@ async fn fail() -> io::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn handshake_flush_pending() -> io::Result<()> {
-    pass_impl(utils::FlushWrapper::new, false).await
-}
-
 // Regression test for https://github.com/rustls/tokio-rustls/issues/204
 #[tokio::test]
 async fn propagate_connection_aborted() {
@@ -201,23 +197,27 @@ async fn propagate_connection_aborted() {
     let cert = CertificateDer::from(cert);
     let signing_key = PrivateKeyDer::from(signing_key);
 
-    let provider = Arc::new(default_provider());
-    let server_config = ServerConfig::builder_with_provider(provider.clone())
-        .with_protocol_versions(DEFAULT_VERSIONS)
-        .unwrap()
+    let provider = Arc::new(DEFAULT_PROVIDER);
+    let server_config = ServerConfig::builder(provider.clone())
         .with_no_client_auth()
-        .with_single_cert(vec![cert.clone()], signing_key)
+        .with_server_credential_resolver(Arc::new(SingleCredential::from(
+            Credentials::from_der(
+                Arc::new(Identity::from_cert_chain(vec![cert.clone()]).unwrap()),
+                signing_key,
+                &provider,
+            )
+            .unwrap(),
+        )))
         .unwrap();
 
-    let client_config = ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(DEFAULT_VERSIONS)
-        .unwrap()
+    let client_config = ClientConfig::builder(provider)
         .with_root_certificates({
             let mut roots = RootCertStore::empty();
             roots.add(cert).unwrap();
             roots
         })
-        .with_no_client_auth();
+        .with_no_client_auth()
+        .unwrap();
 
     let (client_io, server_io) = tokio::io::duplex(16 * 1024);
     let trigger_connection_aborted = AtomicBool::new(false);
@@ -284,8 +284,8 @@ async fn from_parts_roundtrip() -> io::Result<()> {
         client.write_all(b"hello, world!").await?;
         client.flush().await?;
 
-        let (io, session) = client.into_inner();
-        let mut client = tokio_rustls::client::TlsStream::from_parts(io, session);
+        let parts = client.into_inner();
+        let mut client = tokio_rustls::client::TlsStream::from_parts(parts);
 
         let mut buf = [0; 3];
         client.read_exact(&mut buf).await?;
@@ -303,8 +303,8 @@ async fn from_parts_roundtrip() -> io::Result<()> {
     server.read_exact(&mut buf).await?;
     assert_eq!(&buf, b"hello");
 
-    let (io, session) = server.into_inner();
-    let mut server = tokio_rustls::server::TlsStream::from_parts(io, session);
+    let parts = server.into_inner();
+    let mut server = tokio_rustls::server::TlsStream::from_parts(parts);
 
     let mut buf = [0; 8];
     server.read_exact(&mut buf).await?;
@@ -332,15 +332,26 @@ async fn from_parts_across_runtimes() -> io::Result<()> {
 
         // Detach the socket from this runtime and hand the established
         // connection to a runtime on another thread, which re-registers it.
-        let (io, session) = stream.into_inner();
+        let TlsStreamParts {
+            io,
+            conn,
+            input,
+            tls,
+            received_plaintext,
+        } = stream.into_inner();
         let io = io.into_std()?;
         let worker = thread::spawn(move || {
             runtime::Builder::new_current_thread()
                 .enable_io()
                 .build()?
                 .block_on(async move {
-                    let io = TcpStream::from_std(io)?;
-                    let mut stream = tokio_rustls::server::TlsStream::from_parts(io, session);
+                    let mut stream = tokio_rustls::server::TlsStream::from_parts(TlsStreamParts {
+                        io: TcpStream::from_std(io)?,
+                        conn,
+                        input,
+                        tls,
+                        received_plaintext,
+                    });
 
                     let mut buf = [0; 4];
                     stream.read_exact(&mut buf).await?;
