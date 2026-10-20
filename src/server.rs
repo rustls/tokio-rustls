@@ -97,7 +97,8 @@ impl TlsAcceptor {
 pub struct LazyConfigAcceptor<IO> {
     acceptor: rustls::server::Acceptor,
     io: Option<IO>,
-    alert: Option<(rustls::Error, AcceptedAlert)>,
+    alert: Option<AlertState>,
+    send_alert: bool,
 }
 
 impl<IO> LazyConfigAcceptor<IO>
@@ -126,7 +127,37 @@ where
             acceptor,
             io: Some(io),
             alert: None,
+            send_alert: true,
         }
+    }
+
+    /// Configure whether to send a TLS alert to the peer when the `ClientHello` is rejected.
+    ///
+    /// Defaults to `true`, in which case the acceptor writes the alert to `io` before
+    /// resolving to an error.
+    ///
+    /// If `false`, the acceptor resolves to an error immediately without writing anything,
+    /// and the alert is held back. The caller can then recover `io` with [`Self::take_io()`]
+    /// (for example, to answer in plaintext), and later send the alert with
+    /// [`Self::write_alert()`] or retrieve it with [`Self::take_alert()`].
+    pub fn send_alert(mut self, send: bool) -> Self {
+        self.send_alert = send;
+        self
+    }
+
+    /// Writes and flushes the alert held back due to `send_alert(false)`, consuming it.
+    ///
+    /// Does nothing if there is no held back alert.
+    pub async fn write_alert(&mut self, io: &mut IO) -> io::Result<()> {
+        let Some(alert) = self.take_alert() else {
+            return Ok(());
+        };
+
+        WritingAlert {
+            io,
+            alert: Some(alert),
+        }
+        .await
     }
 
     /// Takes back the client connection. Will return `None` if called more than once or if the
@@ -173,6 +204,18 @@ where
     pub fn take_io(&mut self) -> Option<IO> {
         self.io.take()
     }
+
+    /// Takes the alert held back due to `send_alert(false)`. Will return `None` if called
+    /// more than once, if no alert was produced, or if alerts are sent automatically.
+    pub fn take_alert(&mut self) -> Option<AcceptedAlert> {
+        match self.alert.take() {
+            Some(AlertState::Saved(alert)) => Some(alert),
+            other => {
+                self.alert = other;
+                None
+            }
+        }
+    }
 }
 
 impl<IO> Future for LazyConfigAcceptor<IO>
@@ -194,20 +237,33 @@ where
                 }
             };
 
-            if let Some((err, mut alert)) = this.alert.take() {
-                match alert.write(&mut SyncWriteAdapter { io, cx }) {
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        this.alert = Some((err, alert));
-                        return Poll::Pending;
-                    }
-                    Ok(0) | Err(_) => {
-                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
-                    }
-                    Ok(_) => {
-                        this.alert = Some((err, alert));
-                        continue;
-                    }
-                };
+            match this.alert.take() {
+                Some(AlertState::Sending(err, mut alert)) => {
+                    match alert.write(&mut SyncWriteAdapter { io, cx }) {
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            this.alert = Some(AlertState::Sending(err, alert));
+                            return Poll::Pending;
+                        }
+                        Ok(0) | Err(_) => {
+                            return Poll::Ready(Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                err,
+                            )));
+                        }
+                        Ok(_) => {
+                            this.alert = Some(AlertState::Sending(err, alert));
+                            continue;
+                        }
+                    };
+                }
+                Some(saved @ AlertState::Saved(_)) => {
+                    this.alert = Some(saved);
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "acceptor cannot be polled after failure",
+                    )));
+                }
+                None => {}
             }
 
             let mut reader = SyncReadAdapter { io, cx };
@@ -224,9 +280,45 @@ where
                     return Poll::Ready(Ok(StartHandshake { accepted, io }));
                 }
                 Ok(None) => {}
-                Err((err, alert)) => {
-                    this.alert = Some((err, alert));
-                }
+                Err((err, alert)) => match this.send_alert {
+                    true => this.alert = Some(AlertState::Sending(err, alert)),
+                    false => {
+                        this.alert = Some(AlertState::Saved(alert));
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
+                    }
+                },
+            }
+        }
+    }
+}
+
+enum AlertState {
+    Sending(rustls::Error, AcceptedAlert),
+    Saved(AcceptedAlert),
+}
+
+struct WritingAlert<'a, IO> {
+    io: &'a mut IO,
+    alert: Option<AcceptedAlert>,
+}
+
+impl<IO> Future for WritingAlert<'_, IO>
+where
+    IO: AsyncWrite + Unpin,
+{
+    type Output = Result<(), io::Error>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        loop {
+            let Some(alert) = this.alert.as_mut() else {
+                return Pin::new(&mut *this.io).poll_flush(cx);
+            };
+
+            match alert.write(&mut SyncWriteAdapter { io: this.io, cx }) {
+                Ok(0) => this.alert = None,
+                Ok(_) => continue,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
+                Err(e) => return Poll::Ready(Err(e)),
             }
         }
     }
