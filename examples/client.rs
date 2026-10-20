@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
         io_timeout,
     )
     .await?;
-    
+
     // graceful TLS shutdown.
     //
     // `shutdown()` writes a close_notify alert, so it too can block on a stalled peer.
@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
         Duration::from_secs(options.shutdown_timeout),
     )
     .await?;
-    
+
     let mut stdout = tokio_stdout();
     let mut buf = vec![0u8; 8192];
     loop {
