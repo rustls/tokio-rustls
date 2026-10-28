@@ -282,6 +282,7 @@ impl<IO> TlsStream<IO> {
             session,
             state: TlsState::Stream,
             need_flush: false,
+            error: None,
             #[cfg(feature = "early-data")]
             early_waker: None,
         }
