@@ -442,5 +442,51 @@ async fn propagate_connection_aborted() {
     server.abort();
 }
 
+/// Writes `len` bytes into `writer`, then performs a single `poll_read` on `reader` with a
+/// buffer large enough to hold everything, and returns how many bytes that one call returned.
+async fn single_poll_read_len(
+    mut writer: impl AsyncWrite + Unpin,
+    mut reader: impl AsyncRead + Unpin,
+    len: usize,
+) -> usize {
+    writer.write_all(&vec![0x42; len]).await.unwrap();
+    writer.flush().await.unwrap();
+
+    let mut storage = vec![0u8; len];
+    let mut buf = ReadBuf::new(&mut storage);
+    future::poll_fn(|cx| Pin::new(&mut reader).poll_read(cx, &mut buf))
+        .await
+        .unwrap();
+    buf.filled().len()
+}
+
+#[tokio::test]
+async fn poll_read_is_bounded() {
+    // Decrypting 64 records takes well over the per-poll time budget, so a single
+    // `poll_read` must stop before draining all of them.
+    const PAYLOAD_LEN: usize = 1024 * 1024;
+    // The transport must hold the whole encrypted payload, so that every record is
+    // available to the first `poll_read`.
+    let (client_io, server_io) = tokio::io::duplex(2 * PAYLOAD_LEN);
+
+    let (server_config, client_config) = utils::make_configs();
+    let (client, server) = tokio::join!(
+        TlsConnector::from(Arc::new(client_config)).connect(
+            ServerName::try_from(utils::TEST_SERVER_DOMAIN).unwrap(),
+            client_io,
+        ),
+        TlsAcceptor::from(Arc::new(server_config)).accept(server_io),
+    );
+    let (mut client, mut server) = (client.unwrap(), server.unwrap());
+
+    // Server writes, client reads.
+    let n = single_poll_read_len(&mut server, &mut client, PAYLOAD_LEN).await;
+    assert!(n < PAYLOAD_LEN, "expected a partial read, got {n} bytes");
+
+    // Client writes, server reads.
+    let n = single_poll_read_len(&mut client, &mut server, PAYLOAD_LEN).await;
+    assert!(n < PAYLOAD_LEN, "expected a partial read, got {n} bytes");
+}
+
 // Include `utils` module
 include!("utils.rs");
