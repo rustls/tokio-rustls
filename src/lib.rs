@@ -63,7 +63,7 @@ pub mod client;
 pub use client::{Connect, FallibleConnect, TlsConnector, TlsConnectorWithAlpn};
 mod common;
 pub mod server;
-pub use server::{Accept, FallibleAccept, LazyConfigAcceptor, StartHandshake, TlsAcceptor};
+pub use server::{Accept, FallibleAccept, TlsAcceptor};
 
 /// Unified TLS stream type
 ///

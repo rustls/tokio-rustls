@@ -18,15 +18,14 @@ use std::time::Duration;
 
 use argh::FromArgs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{Instant, timeout, timeout_at};
+use tokio::net::TcpListener;
+use tokio::time::timeout;
+use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::crypto::aws_lc_rs::default_provider;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use tokio_rustls::rustls::server::Acceptor;
 use tokio_rustls::rustls::{DEFAULT_VERSIONS, ServerConfig};
 use tokio_rustls::server::TlsStream;
-use tokio_rustls::{LazyConfigAcceptor, TlsAcceptor};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
@@ -57,19 +56,10 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
 
     loop {
         let acceptor = acceptor.clone();
-        let config = config.clone();
         let (stream, peer_addr) = listener.accept().await?;
-
         let fut = async move {
-            let stream = match options.lazy {
-                // Accept the connection lazily, applying the handshake_timeout.
-                true => accept_lazy(config, stream, handshake_timeout).await?,
-                // Or, directly accept the stream, applying the handshake_timeout.
-                false => {
-                    with_timeout(acceptor.accept(stream), "TLS handshake", handshake_timeout)
-                        .await?
-                }
-            };
+            let stream =
+                with_timeout(acceptor.accept(stream), "TLS handshake", handshake_timeout).await?;
 
             let n = serve(stream, io_timeout, shutdown_timeout).await?;
             println!("Echo: {} - {}", peer_addr, n);
@@ -100,10 +90,6 @@ struct Options {
     #[argh(option, short = 'k')]
     key: PathBuf,
 
-    /// use LazyConfigAcceptor instead of TlsAcceptor
-    #[argh(switch, short = 'l')]
-    lazy: bool,
-
     /// TLS handshake timeout (seconds)
     #[argh(option, default = "5")]
     handshake_timeout: u64,
@@ -115,61 +101,6 @@ struct Options {
     /// graceful TLS shutdown (close_notify) timeout (seconds)
     #[argh(option, default = "5")]
     shutdown_timeout: u64,
-}
-
-/// Accept a TLS connection with `LazyConfigAcceptor` under a single deadline.
-///
-/// The handshake has two await points:
-///
-/// 1. reading the ClientHello
-/// 2. driving the rest of the handshake with the chosen config
-///
-/// A shared `Instant` deadline (via `timeout_at`) keeps the total bounded
-/// rather than granting each phase its own budget.
-///
-/// If the client stalls before even sending a ClientHello we can take the
-/// socket back with `take_io()` and respond in plaintext before hanging up.
-async fn accept_lazy(
-    config: Arc<ServerConfig>,
-    stream: TcpStream,
-    handshake_timeout: Duration,
-) -> io::Result<TlsStream<TcpStream>> {
-    let deadline = Instant::now() + handshake_timeout;
-
-    let acceptor = LazyConfigAcceptor::new(Acceptor::default(), stream);
-    tokio::pin!(acceptor);
-
-    // Read the ClientHello, respecting the deadline.
-    let start = match timeout_at(deadline, acceptor.as_mut()).await {
-        Ok(result) => result?,
-        Err(_) => {
-            // No ClientHello arrived in time. No TLS handshake has happened yet,
-            // so we can still answer in plaintext.
-            if let Some(mut stream) = acceptor.take_io() {
-                let _ = stream
-                    .write_all(b"HTTP/1.0 408 Request Timeout\r\n\r\n")
-                    .await;
-            }
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("timed out awaiting ClientHello after {handshake_timeout:?}"),
-            ));
-        }
-    };
-
-    // The ClientHello is now available, e.g. for SNI-based config selection.
-    if let Some(sni) = start.client_hello().server_name() {
-        println!("ClientHello with SNI: {sni}");
-    }
-
-    // Complete the handshake, respecting the deadline.
-    match timeout_at(deadline, start.into_stream(config)).await {
-        Ok(result) => result,
-        Err(_elapsed) => Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("TLS handshake timed out after {handshake_timeout:?}"),
-        )),
-    }
 }
 
 /// Serve a single established TLS `stream`, respecting timeouts.
