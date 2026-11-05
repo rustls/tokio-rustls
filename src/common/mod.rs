@@ -9,6 +9,16 @@ use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 mod handshake;
 pub(crate) use handshake::{IoSession, MidHandshake};
 
+/// Number of plaintext bytes after which `TlsStream::poll_read` stops batching records.
+///
+/// `poll_read` drains as many buffered records as fit in the caller's buffer to save
+/// wake-ups, but every record costs a decryption. Without a cap, a caller with a large
+/// buffer (hyper grows its read buffer up to ~400 KiB) holds the executor thread for the
+/// whole batch, which shows up as long polls. Returning once at least this many bytes have
+/// been copied keeps the batching benefit while bounding the work done per poll. A single
+/// call may overshoot by less than one record.
+pub(crate) const MAX_READ_PER_POLL: usize = 128 * 1024;
+
 #[derive(Debug)]
 pub(crate) enum TlsState {
     #[cfg(feature = "early-data")]
