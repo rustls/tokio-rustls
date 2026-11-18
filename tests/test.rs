@@ -14,8 +14,8 @@ use rustls::crypto::aws_lc_rs::default_provider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, DEFAULT_VERSIONS, RootCertStore, ServerConfig};
 use tokio::io::{
-    AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream, ReadBuf, copy,
-    split,
+    AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, BufWriter, DuplexStream, ReadBuf,
+    copy, split,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
@@ -322,6 +322,56 @@ async fn lazy_config_acceptor_alert() {
 
     let fatal_alert_decode_error = b"\x15\x03\x03\x00\x02\x02\x32";
     assert_eq!(received, fatal_alert_decode_error)
+}
+
+#[tokio::test]
+async fn handshake_alert_flushed() {
+    let (mut sconfig, mut cconfig) = utils::make_configs();
+    sconfig.alpn_protocols = vec![b"h2".to_vec()];
+    cconfig.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let (cstream, sstream) = tokio::io::duplex(1024);
+
+    let server = tokio::spawn(async move {
+        let acceptor = TlsAcceptor::from(Arc::new(sconfig));
+        // The stream is dropped with the error, so the alert has to be flushed by then.
+        acceptor.accept(BufWriter::new(sstream)).await.unwrap_err();
+    });
+
+    let domain = ServerName::try_from("foobar.com").unwrap();
+    let connect = TlsConnector::from(Arc::new(cconfig)).connect(domain, cstream);
+    let Ok(Err(err)) = time::timeout(Duration::from_secs(3), connect).await else {
+        panic!("timeout or unexpected success");
+    };
+    assert_eq!(
+        err.to_string(),
+        "received fatal alert: NoApplicationProtocol"
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn acceptor_alert_flushed() {
+    let (mut sconfig, mut cconfig) = utils::make_configs();
+    sconfig.alpn_protocols = vec![b"h2".to_vec()];
+    cconfig.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let (cstream, sstream) = tokio::io::duplex(1024);
+
+    let server = tokio::spawn(async move {
+        let acceptor = LazyConfigAcceptor::new(Default::default(), BufWriter::new(sstream));
+        let start = acceptor.await.unwrap();
+        start.into_stream(Arc::new(sconfig)).await.unwrap_err();
+    });
+
+    let domain = ServerName::try_from("foobar.com").unwrap();
+    let connect = TlsConnector::from(Arc::new(cconfig)).connect(domain, cstream);
+    let Ok(Err(err)) = time::timeout(Duration::from_secs(3), connect).await else {
+        panic!("timeout or unexpected success");
+    };
+    assert_eq!(
+        err.to_string(),
+        "received fatal alert: NoApplicationProtocol"
+    );
+    server.await.unwrap();
 }
 
 #[tokio::test]
