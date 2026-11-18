@@ -292,6 +292,9 @@ where
 
             while self.session.wants_write() {
                 match self.write_io(cx) {
+                    Poll::Ready(Ok(0)) if pos == 0 => {
+                        return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+                    }
                     Poll::Ready(Ok(0)) | Poll::Pending => {
                         would_block = true;
                         break;
@@ -326,6 +329,9 @@ where
 
             while self.session.wants_write() {
                 match self.write_io(cx) {
+                    Poll::Ready(Ok(0)) if written == 0 => {
+                        return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+                    }
                     Poll::Ready(Ok(0)) | Poll::Pending => {
                         would_block = true;
                         break;

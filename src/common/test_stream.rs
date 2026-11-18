@@ -366,6 +366,50 @@ async fn stream_write_zero() -> io::Result<()> {
     Ok(()) as io::Result<()>
 }
 
+#[tokio::test]
+async fn stream_write_zero_full_buffer() -> io::Result<()> {
+    stream_write_zero_full_buffer_impl(false).await
+}
+
+#[tokio::test]
+async fn stream_write_zero_full_buffer_vectored() -> io::Result<()> {
+    stream_write_zero_full_buffer_impl(true).await
+}
+
+async fn stream_write_zero_full_buffer_impl(vectored: bool) -> io::Result<()> {
+    let (server, mut client) = make_pair();
+    let mut server = Connection::from(server);
+    poll_fn(|cx| do_handshake(&mut client, &mut server, cx)).await?;
+
+    let mut io = Eof;
+    let mut stream = Stream::new(&mut io, &mut client);
+    let mut cx = Context::from_waker(noop_waker_ref());
+    let buf = vec![0; 128 * 1024];
+    let mut poll_write = |stream: &mut Stream<'_, Eof, ClientConnection>, buf: &[u8]| {
+        let stream = Pin::new(stream);
+        match vectored {
+            true => stream.poll_write_vectored(&mut cx, &[io::IoSlice::new(buf)]),
+            false => stream.poll_write(&mut cx, buf),
+        }
+    };
+
+    // The first write is buffered by rustls up to its buffer limit.
+    let n = match poll_write(&mut stream, &buf) {
+        Poll::Ready(Ok(n)) => n,
+        other => panic!("unexpected first write: {other:?}"),
+    };
+    assert!(0 < n && n < buf.len());
+
+    // With the buffer full and `io` refusing bytes, nothing would ever wake us up.
+    let result = poll_write(&mut stream, &buf[n..]);
+    assert!(
+        matches!(&result, Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::WriteZero),
+        "{result:?}"
+    );
+
+    Ok(()) as io::Result<()>
+}
+
 fn make_pair() -> (ServerConnection, ClientConnection) {
     let (sconfig, cconfig) = utils::make_configs();
     let server = ServerConnection::new(Arc::new(sconfig)).unwrap();
