@@ -57,7 +57,14 @@ where
                         *this = Self::SendAlert { io, error, alert };
                         return Poll::Pending;
                     }
-                    Err(_) | Ok(0) => return Poll::Ready(Err((error, io))),
+                    Err(_) => return Poll::Ready(Err((error, io))),
+                    Ok(0) => {
+                        if Pin::new(&mut io).poll_flush(cx).is_pending() {
+                            *this = Self::SendAlert { io, error, alert };
+                            return Poll::Pending;
+                        }
+                        return Poll::Ready(Err((error, io)));
+                    }
                     Ok(_) => {}
                 };
             },

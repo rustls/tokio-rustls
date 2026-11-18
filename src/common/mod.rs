@@ -111,6 +111,7 @@ where
             // try a last-gasp write -- but don't predate the primary
             // error.
             let _ = self.write_io(cx);
+            let _ = Pin::new(&mut self.io).poll_flush(cx);
 
             io::Error::new(io::ErrorKind::InvalidData, err)
         })?;
