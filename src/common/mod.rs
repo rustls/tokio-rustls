@@ -2,12 +2,20 @@ use std::io::{self, BufRead as _, IoSlice, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use rustls::{ConnectionCommon, SideData};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 
 mod handshake;
 pub(crate) use handshake::{IoSession, MidHandshake};
+
+/// Time after which `TlsStream::poll_read` stops batching records.
+///
+/// `poll_read` drains as many buffered records as fit in the caller's buffer to save
+/// wake-ups, but every record costs a decryption. Returning once this much time has been
+/// spent bounds how long a single poll holds the executor thread, whatever the buffer size.
+pub(crate) const MAX_READ_DURATION_PER_POLL: Duration = Duration::from_micros(100);
 
 #[derive(Debug)]
 pub(crate) enum TlsState {
